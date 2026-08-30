@@ -1,0 +1,4 @@
+[package]
+name = "arnis-adapter"
+version.workspace = true
+edition.workspace = true
