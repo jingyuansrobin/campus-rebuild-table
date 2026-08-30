@@ -1,0 +1,7 @@
+[package]
+name = "mcrebuild-cli"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+app-core.workspace = true
