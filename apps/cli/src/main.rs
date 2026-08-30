@@ -28,10 +28,7 @@ fn run() -> Result<(), String> {
         1.5
     };
 
-    let minecraft_version = args
-        .get(5)
-        .cloned()
-        .unwrap_or_else(|| "1.20.1".to_owned());
+    let minecraft_version = args.get(5).cloned().unwrap_or_else(|| "1.20.1".to_owned());
 
     let request = CreateProjectRequest {
         project_dir: PathBuf::from(&args[1]),
