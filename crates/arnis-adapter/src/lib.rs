@@ -68,7 +68,9 @@ impl ArnisAdapter {
             })?;
 
         if !status.success() {
-            return Err(ArnisError::NonZeroExit { code: status.code() });
+            return Err(ArnisError::NonZeroExit {
+                code: status.code(),
+            });
         }
 
         let world_dir = discover_java_world(&spec.output_dir)?;
