@@ -181,7 +181,9 @@ pub fn generate_project_with_arnis(
     })
 }
 
-fn ensure_supported_generation_target(target: GenerationTarget) -> Result<(), GenerateProjectError> {
+fn ensure_supported_generation_target(
+    target: GenerationTarget,
+) -> Result<(), GenerateProjectError> {
     match target {
         GenerationTarget::MinecraftJava => Ok(()),
     }
@@ -572,7 +574,10 @@ mod tests {
         })
         .unwrap_err();
 
-        assert!(matches!(error, GenerateProjectError::OutputAlreadyExists(_)));
+        assert!(matches!(
+            error,
+            GenerateProjectError::OutputAlreadyExists(_)
+        ));
         fs::remove_dir_all(project_dir).expect("cleanup test directory");
     }
 
