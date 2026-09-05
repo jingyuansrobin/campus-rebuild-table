@@ -30,6 +30,13 @@ pub struct SetProjectBoundaryRequest {
     pub vertices: Vec<Wgs84Coordinate>,
 }
 
+#[derive(Debug, Clone, PartialEq)]
+pub struct BoundaryEditorContext {
+    pub campus_display_name: String,
+    pub anchor: Wgs84Coordinate,
+    pub existing_boundary: Option<CampusBoundary>,
+}
+
 pub fn create_local_project(
     request: CreateProjectRequest,
 ) -> Result<CampusProject, CreateProjectError> {
@@ -55,6 +62,26 @@ pub fn create_project_from_candidate(
     );
 
     persist_new_project(&request.project_dir, project, reality)
+}
+
+pub fn load_boundary_editor_context(
+    project_dir: &Path,
+) -> Result<BoundaryEditorContext, LoadProjectError> {
+    let project_bytes = fs::read(project_dir.join("project.json"))?;
+    let project: CampusProject = serde_json::from_slice(&project_bytes)?;
+    let reality_bytes = fs::read(project_dir.join("reality.json"))?;
+    let reality: RealityModel = serde_json::from_slice(&reality_bytes)?;
+    let anchor = reality
+        .sources
+        .iter()
+        .find_map(|source| source.anchor)
+        .ok_or(LoadProjectError::MissingCampusAnchor)?;
+
+    Ok(BoundaryEditorContext {
+        campus_display_name: project.campus.display_name,
+        anchor,
+        existing_boundary: project.boundary,
+    })
 }
 
 pub fn set_project_boundary(
@@ -154,6 +181,16 @@ pub enum CreateProjectError {
     Json(#[from] serde_json::Error),
     #[error(transparent)]
     WriteJson(#[from] ProjectFileWriteError),
+}
+
+#[derive(Debug, Error)]
+pub enum LoadProjectError {
+    #[error("project has no geographic anchor; recreate it from a campus search result")]
+    MissingCampusAnchor,
+    #[error(transparent)]
+    Io(#[from] std::io::Error),
+    #[error(transparent)]
+    Json(#[from] serde_json::Error),
 }
 
 #[derive(Debug, Error)]
@@ -260,6 +297,41 @@ mod tests {
             serde_json::from_slice(&reality_json).expect("parse reality.json");
         assert_eq!(reality.sources[0].reference, "B001");
         assert_eq!(reality.sources[0].anchor, Some(selected.anchor));
+
+        fs::remove_dir_all(project_dir).expect("cleanup test directory");
+    }
+
+    #[test]
+    fn boundary_editor_context_is_loaded_by_app_core() {
+        let project_dir = temporary_test_path("editor-context");
+        create_project_from_candidate(CreateProjectFromCandidateRequest {
+            project_dir: project_dir.clone(),
+            candidate: candidate(),
+            minecraft_version: "1.20.1".into(),
+            blocks_per_meter: 1.5,
+        })
+        .expect("create candidate project");
+        set_project_boundary(SetProjectBoundaryRequest {
+            project_dir: project_dir.clone(),
+            vertices: valid_boundary_vertices(),
+        })
+        .expect("set boundary");
+
+        let context = load_boundary_editor_context(&project_dir).expect("load editor context");
+        assert_eq!(context.campus_display_name, "华东师范大学(普陀校区)");
+        assert_eq!(context.anchor, point(121.400, 31.226));
+        assert!(context.existing_boundary.is_some());
+
+        fs::remove_dir_all(project_dir).expect("cleanup test directory");
+    }
+
+    #[test]
+    fn manual_project_without_anchor_cannot_open_map_editor() {
+        let project_dir = temporary_test_path("missing-anchor");
+        create_local_project(request(project_dir.clone())).expect("create project");
+
+        let error = load_boundary_editor_context(&project_dir).unwrap_err();
+        assert!(matches!(error, LoadProjectError::MissingCampusAnchor));
 
         fs::remove_dir_all(project_dir).expect("cleanup test directory");
     }
