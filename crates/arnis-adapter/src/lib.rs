@@ -1,8 +1,6 @@
 mod lifecycle;
 
-pub use lifecycle::{
-    ArnisCancellationToken, ArnisEvent, ArnisLogStream, ArnisStage,
-};
+pub use lifecycle::{ArnisCancellationToken, ArnisEvent, ArnisLogStream, ArnisStage};
 
 use campus_core::{GenerationScale, Wgs84BoundingBox};
 use std::ffi::{OsStr, OsString};
