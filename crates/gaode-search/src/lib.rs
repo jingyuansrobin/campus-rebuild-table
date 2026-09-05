@@ -1,14 +1,16 @@
-use campus_core::{
-    CampusCandidate, CampusIdentity, CampusSourceReference, GeoCoordinate, GeoCoordinateError,
-};
+use campus_core::{CampusCandidate, CampusIdentity, CampusSourceReference, Wgs84Coordinate};
 use serde::Deserialize;
 use serde_json::Value;
 use std::collections::HashSet;
+use std::f64::consts::PI;
 use thiserror::Error;
 
 const GAODE_TEXT_SEARCH_ENDPOINT: &str = "https://restapi.amap.com/v3/place/text";
 const HIGHER_EDUCATION_TYPECODE: &str = "141201";
 const MAX_RESULTS: usize = 20;
+const KRASOVSKY_A: f64 = 6_378_245.0;
+const KRASOVSKY_EE: f64 = 0.006_693_421_622_965_943;
+const GCJ_INVERSE_ITERATIONS: usize = 4;
 
 pub struct GaodeSearchClient {
     api_key: String,
@@ -87,7 +89,7 @@ pub fn parse_search_response(json: &str) -> Result<Vec<CampusCandidate>, SearchE
             continue;
         }
 
-        let Some(anchor) = parse_location(&raw.location) else {
+        let Some(anchor) = parse_gcj02_location_as_wgs84(&raw.location) else {
             continue;
         };
         let display_name = raw.name.trim();
@@ -145,12 +147,76 @@ struct RawPoi {
     adname: Value,
 }
 
-fn parse_location(value: &Value) -> Option<GeoCoordinate> {
+fn parse_gcj02_location_as_wgs84(value: &Value) -> Option<Wgs84Coordinate> {
     let text = value.as_str()?.trim();
     let (longitude, latitude) = text.split_once(',')?;
-    let longitude = longitude.trim().parse::<f64>().ok()?;
-    let latitude = latitude.trim().parse::<f64>().ok()?;
-    GeoCoordinate::try_new(longitude, latitude).ok()
+    let gcj_longitude = longitude.trim().parse::<f64>().ok()?;
+    let gcj_latitude = latitude.trim().parse::<f64>().ok()?;
+    if !gcj_longitude.is_finite()
+        || !gcj_latitude.is_finite()
+        || !(-180.0..=180.0).contains(&gcj_longitude)
+        || !(-90.0..=90.0).contains(&gcj_latitude)
+    {
+        return None;
+    }
+
+    let (wgs_longitude, wgs_latitude) = gcj02_to_wgs84(gcj_longitude, gcj_latitude);
+    Wgs84Coordinate::try_new(wgs_longitude, wgs_latitude).ok()
+}
+
+fn gcj02_to_wgs84(gcj_longitude: f64, gcj_latitude: f64) -> (f64, f64) {
+    if out_of_china(gcj_longitude, gcj_latitude) {
+        return (gcj_longitude, gcj_latitude);
+    }
+
+    let mut wgs_longitude = gcj_longitude;
+    let mut wgs_latitude = gcj_latitude;
+    for _ in 0..GCJ_INVERSE_ITERATIONS {
+        let (estimated_gcj_longitude, estimated_gcj_latitude) =
+            wgs84_to_gcj02(wgs_longitude, wgs_latitude);
+        wgs_longitude -= estimated_gcj_longitude - gcj_longitude;
+        wgs_latitude -= estimated_gcj_latitude - gcj_latitude;
+    }
+    (wgs_longitude, wgs_latitude)
+}
+
+fn wgs84_to_gcj02(longitude: f64, latitude: f64) -> (f64, f64) {
+    if out_of_china(longitude, latitude) {
+        return (longitude, latitude);
+    }
+
+    let delta_latitude = transform_latitude(longitude - 105.0, latitude - 35.0);
+    let delta_longitude = transform_longitude(longitude - 105.0, latitude - 35.0);
+    let latitude_radians = latitude.to_radians();
+    let sin_latitude = latitude_radians.sin();
+    let magic = 1.0 - KRASOVSKY_EE * sin_latitude * sin_latitude;
+    let sqrt_magic = magic.sqrt();
+    let adjusted_latitude = (delta_latitude * 180.0)
+        / ((KRASOVSKY_A * (1.0 - KRASOVSKY_EE)) / (magic * sqrt_magic) * PI);
+    let adjusted_longitude =
+        (delta_longitude * 180.0) / (KRASOVSKY_A / sqrt_magic * latitude_radians.cos() * PI);
+
+    (longitude + adjusted_longitude, latitude + adjusted_latitude)
+}
+
+fn out_of_china(longitude: f64, latitude: f64) -> bool {
+    !(72.004..=137.8347).contains(&longitude) || !(0.8293..=55.8271).contains(&latitude)
+}
+
+fn transform_latitude(x: f64, y: f64) -> f64 {
+    let mut result = -100.0 + 2.0 * x + 3.0 * y + 0.2 * y * y + 0.1 * x * y + 0.2 * x.abs().sqrt();
+    result += (20.0 * (6.0 * x * PI).sin() + 20.0 * (2.0 * x * PI).sin()) * 2.0 / 3.0;
+    result += (20.0 * (y * PI).sin() + 40.0 * (y / 3.0 * PI).sin()) * 2.0 / 3.0;
+    result += (160.0 * (y / 12.0 * PI).sin() + 320.0 * (y * PI / 30.0).sin()) * 2.0 / 3.0;
+    result
+}
+
+fn transform_longitude(x: f64, y: f64) -> f64 {
+    let mut result = 300.0 + x + 2.0 * y + 0.1 * x * x + 0.1 * x * y + 0.1 * x.abs().sqrt();
+    result += (20.0 * (6.0 * x * PI).sin() + 20.0 * (2.0 * x * PI).sin()) * 2.0 / 3.0;
+    result += (20.0 * (x * PI).sin() + 40.0 * (x / 3.0 * PI).sin()) * 2.0 / 3.0;
+    result += (150.0 * (x / 12.0 * PI).sin() + 300.0 * (x / 30.0 * PI).sin()) * 2.0 / 3.0;
+    result
 }
 
 fn compose_address(raw: &RawPoi) -> String {
@@ -250,8 +316,6 @@ pub enum SearchError {
     ServiceRejected { info: String, infocode: String },
     #[error("campus search returned malformed data: {0}")]
     MalformedResponse(String),
-    #[error(transparent)]
-    InvalidCoordinate(#[from] GeoCoordinateError),
 }
 
 #[cfg(test)]
@@ -294,6 +358,23 @@ mod tests {
             Some("普陀校区")
         );
         assert_eq!(candidates[0].source.external_id, "B01");
+        assert!((candidates[0].anchor.longitude() - 121.406).abs() > 0.001);
+        assert!((candidates[0].anchor.latitude() - 31.228).abs() > 0.001);
+    }
+
+    #[test]
+    fn gcj02_inverse_round_trip_is_stable_for_shanghai() {
+        let gcj = (121.406, 31.228);
+        let wgs = gcj02_to_wgs84(gcj.0, gcj.1);
+        let reconstructed_gcj = wgs84_to_gcj02(wgs.0, wgs.1);
+
+        assert!((reconstructed_gcj.0 - gcj.0).abs() < 1e-7);
+        assert!((reconstructed_gcj.1 - gcj.1).abs() < 1e-7);
+    }
+
+    #[test]
+    fn gcj02_inverse_is_identity_outside_china() {
+        assert_eq!(gcj02_to_wgs84(-74.006, 40.7128), (-74.006, 40.7128));
     }
 
     #[test]

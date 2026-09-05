@@ -1,7 +1,8 @@
 use app_core::{
-    create_local_project, create_project_from_candidate, CreateProjectFromCandidateRequest,
-    CreateProjectRequest,
+    create_local_project, create_project_from_candidate, set_project_boundary,
+    CreateProjectFromCandidateRequest, CreateProjectRequest, SetProjectBoundaryRequest,
 };
+use campus_core::Wgs84Coordinate;
 use gaode_search::GaodeSearchClient;
 use std::env;
 use std::path::PathBuf;
@@ -27,6 +28,7 @@ fn run() -> Result<(), String> {
         "init" => run_manual_init(&args[1..]),
         "search-campus" => run_search_campus(&args[1..]),
         "init-campus" => run_init_campus(&args[1..]),
+        "set-boundary" => run_set_boundary(&args[1..]),
         _ => Err(usage()),
     }
 }
@@ -128,6 +130,59 @@ fn run_init_campus(args: &[String]) -> Result<(), String> {
     Ok(())
 }
 
+fn run_set_boundary(args: &[String]) -> Result<(), String> {
+    if args.len() != 2 {
+        return Err(usage());
+    }
+
+    let project_dir = PathBuf::from(&args[0]);
+    let vertices = parse_boundary_vertices(&args[1])?;
+    let project = set_project_boundary(SetProjectBoundaryRequest {
+        project_dir,
+        vertices,
+    })
+    .map_err(|error| error.to_string())?;
+
+    let boundary = project
+        .boundary
+        .as_ref()
+        .ok_or_else(|| "project boundary was not persisted".to_owned())?;
+    let bbox = boundary.bounding_box();
+    println!(
+        "Boundary saved: {} vertices, {:.0} m²; Arnis transport bbox={},{},{},{}",
+        boundary.vertices().len(),
+        boundary.area_m2(),
+        bbox.min_latitude,
+        bbox.min_longitude,
+        bbox.max_latitude,
+        bbox.max_longitude
+    );
+
+    Ok(())
+}
+
+fn parse_boundary_vertices(value: &str) -> Result<Vec<Wgs84Coordinate>, String> {
+    value
+        .split(';')
+        .map(str::trim)
+        .filter(|pair| !pair.is_empty())
+        .map(|pair| {
+            let (longitude, latitude) = pair
+                .split_once(',')
+                .ok_or_else(|| format!("invalid boundary pair: {pair}"))?;
+            let longitude = longitude
+                .trim()
+                .parse::<f64>()
+                .map_err(|_| format!("invalid longitude in boundary pair: {pair}"))?;
+            let latitude = latitude
+                .trim()
+                .parse::<f64>()
+                .map_err(|_| format!("invalid latitude in boundary pair: {pair}"))?;
+            Wgs84Coordinate::try_new(longitude, latitude).map_err(|error| error.to_string())
+        })
+        .collect()
+}
+
 fn gaode_client() -> Result<GaodeSearchClient, String> {
     let api_key = env::var("AMAP_WEB_SERVICE_KEY")
         .map_err(|_| "AMAP_WEB_SERVICE_KEY is not configured".to_owned())?;
@@ -148,10 +203,31 @@ fn usage() -> String {
         "Usage:\n",
         "  mcrebuild-cli init <project_dir> <school_name> <campus_name> [blocks_per_meter] [minecraft_version]\n",
         "  mcrebuild-cli search-campus <keyword> [region]\n",
-        "  mcrebuild-cli init-campus <project_dir> <keyword> <poi_id> [blocks_per_meter] [minecraft_version] [region]\n\n",
+        "  mcrebuild-cli init-campus <project_dir> <keyword> <poi_id> [blocks_per_meter] [minecraft_version] [region]\n",
+        "  mcrebuild-cli set-boundary <project_dir> \"lon,lat;lon,lat;lon,lat;...\"\n\n",
         "AMap commands require AMAP_WEB_SERVICE_KEY.\n",
+        "All boundary coordinates are WGS-84.\n",
         "Example:\n",
-        "  mcrebuild-cli search-campus \"华东师范大学\" \"上海市\""
+        "  mcrebuild-cli set-boundary ./ecnu \"121.398,31.222;121.414,31.222;121.414,31.234;121.398,31.234\""
     )
     .to_owned()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn boundary_cli_parser_accepts_wgs84_pairs() {
+        let vertices =
+            parse_boundary_vertices("121.398,31.222;121.414,31.222;121.414,31.234;121.398,31.234")
+                .unwrap();
+        assert_eq!(vertices.len(), 4);
+        assert_eq!(vertices[0].longitude(), 121.398);
+    }
+
+    #[test]
+    fn boundary_cli_parser_rejects_bad_pair() {
+        assert!(parse_boundary_vertices("121.398;121.414,31.222").is_err());
+    }
 }

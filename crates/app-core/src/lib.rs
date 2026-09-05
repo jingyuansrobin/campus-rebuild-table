@@ -1,6 +1,6 @@
 use campus_core::{
-    CampusCandidate, CampusIdentity, CampusObjectCollection, CampusProject, GenerationScale,
-    GenerationScaleError, RealityModel,
+    CampusBoundary, CampusBoundaryError, CampusCandidate, CampusIdentity, CampusObjectCollection,
+    CampusProject, GenerationScale, GenerationScaleError, RealityModel, Wgs84Coordinate,
 };
 use serde::Serialize;
 use std::fs;
@@ -22,6 +22,12 @@ pub struct CreateProjectFromCandidateRequest {
     pub candidate: CampusCandidate,
     pub minecraft_version: String,
     pub blocks_per_meter: f32,
+}
+
+#[derive(Debug, Clone)]
+pub struct SetProjectBoundaryRequest {
+    pub project_dir: PathBuf,
+    pub vertices: Vec<Wgs84Coordinate>,
 }
 
 pub fn create_local_project(
@@ -49,6 +55,18 @@ pub fn create_project_from_candidate(
     );
 
     persist_new_project(&request.project_dir, project, reality)
+}
+
+pub fn set_project_boundary(
+    request: SetProjectBoundaryRequest,
+) -> Result<CampusProject, UpdateProjectError> {
+    let boundary = CampusBoundary::try_new(request.vertices)?;
+    let project_path = request.project_dir.join("project.json");
+    let bytes = fs::read(&project_path)?;
+    let mut project: CampusProject = serde_json::from_slice(&bytes)?;
+    project.set_boundary(boundary);
+    write_json_atomic(&project_path, &project)?;
+    Ok(project)
 }
 
 fn persist_new_project(
@@ -106,12 +124,20 @@ fn ensure_target_is_empty_directory(path: &Path) -> Result<(), CreateProjectErro
     Ok(())
 }
 
-fn write_json_atomic<T: Serialize>(path: &Path, value: &T) -> Result<(), CreateProjectError> {
+fn write_json_atomic<T: Serialize>(path: &Path, value: &T) -> Result<(), ProjectFileWriteError> {
     let temp_path = path.with_extension("json.tmp");
     let bytes = serde_json::to_vec_pretty(value)?;
     fs::write(&temp_path, bytes)?;
     fs::rename(&temp_path, path)?;
     Ok(())
+}
+
+#[derive(Debug, Error)]
+pub enum ProjectFileWriteError {
+    #[error(transparent)]
+    Io(#[from] std::io::Error),
+    #[error(transparent)]
+    Json(#[from] serde_json::Error),
 }
 
 #[derive(Debug, Error)]
@@ -126,12 +152,26 @@ pub enum CreateProjectError {
     Io(#[from] std::io::Error),
     #[error(transparent)]
     Json(#[from] serde_json::Error),
+    #[error(transparent)]
+    WriteJson(#[from] ProjectFileWriteError),
+}
+
+#[derive(Debug, Error)]
+pub enum UpdateProjectError {
+    #[error(transparent)]
+    InvalidBoundary(#[from] CampusBoundaryError),
+    #[error(transparent)]
+    Io(#[from] std::io::Error),
+    #[error(transparent)]
+    Json(#[from] serde_json::Error),
+    #[error(transparent)]
+    WriteJson(#[from] ProjectFileWriteError),
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use campus_core::{CampusSourceReference, GeoCoordinate};
+    use campus_core::{CampusSourceReference, Wgs84Coordinate};
     use std::fs;
     use uuid::Uuid;
 
@@ -149,6 +189,10 @@ mod tests {
         }
     }
 
+    fn point(longitude: f64, latitude: f64) -> Wgs84Coordinate {
+        Wgs84Coordinate::try_new(longitude, latitude).unwrap()
+    }
+
     fn candidate() -> CampusCandidate {
         CampusCandidate {
             source: CampusSourceReference {
@@ -161,8 +205,17 @@ mod tests {
                 display_name: "华东师范大学(普陀校区)".into(),
             },
             address: "中山北路3663号".into(),
-            anchor: GeoCoordinate::try_new(121.406, 31.228).unwrap(),
+            anchor: point(121.400, 31.226),
         }
+    }
+
+    fn valid_boundary_vertices() -> Vec<Wgs84Coordinate> {
+        vec![
+            point(121.3980, 31.2220),
+            point(121.4140, 31.2220),
+            point(121.4140, 31.2340),
+            point(121.3980, 31.2340),
+        ]
     }
 
     #[test]
@@ -208,6 +261,62 @@ mod tests {
         assert_eq!(reality.sources[0].reference, "B001");
         assert_eq!(reality.sources[0].anchor, Some(selected.anchor));
 
+        fs::remove_dir_all(project_dir).expect("cleanup test directory");
+    }
+
+    #[test]
+    fn setting_boundary_only_rewrites_project_json() {
+        let project_dir = temporary_test_path("boundary");
+        create_project_from_candidate(CreateProjectFromCandidateRequest {
+            project_dir: project_dir.clone(),
+            candidate: candidate(),
+            minecraft_version: "1.20.1".into(),
+            blocks_per_meter: 1.5,
+        })
+        .expect("create candidate project");
+
+        let reality_before = fs::read(project_dir.join("reality.json")).unwrap();
+        let objects_before = fs::read(project_dir.join("objects.json")).unwrap();
+
+        let updated = set_project_boundary(SetProjectBoundaryRequest {
+            project_dir: project_dir.clone(),
+            vertices: valid_boundary_vertices(),
+        })
+        .expect("set boundary");
+
+        assert!(updated.boundary.is_some());
+        assert_eq!(
+            fs::read(project_dir.join("reality.json")).unwrap(),
+            reality_before
+        );
+        assert_eq!(
+            fs::read(project_dir.join("objects.json")).unwrap(),
+            objects_before
+        );
+
+        let restored: CampusProject =
+            serde_json::from_slice(&fs::read(project_dir.join("project.json")).unwrap()).unwrap();
+        assert_eq!(updated, restored);
+
+        fs::remove_dir_all(project_dir).expect("cleanup test directory");
+    }
+
+    #[test]
+    fn invalid_boundary_does_not_rewrite_project() {
+        let project_dir = temporary_test_path("invalid-boundary");
+        create_local_project(request(project_dir.clone())).expect("create project");
+        let project_before = fs::read(project_dir.join("project.json")).unwrap();
+
+        let result = set_project_boundary(SetProjectBoundaryRequest {
+            project_dir: project_dir.clone(),
+            vertices: vec![point(121.4, 31.2), point(121.41, 31.21)],
+        });
+
+        assert!(result.is_err());
+        assert_eq!(
+            fs::read(project_dir.join("project.json")).unwrap(),
+            project_before
+        );
         fs::remove_dir_all(project_dir).expect("cleanup test directory");
     }
 
