@@ -1,5 +1,6 @@
 use campus_core::{
-    CampusObjectCollection, CampusProject, GenerationScale, GenerationScaleError, RealityModel,
+    CampusCandidate, CampusIdentity, CampusObjectCollection, CampusProject, GenerationScale,
+    GenerationScaleError, RealityModel,
 };
 use serde::Serialize;
 use std::fs;
@@ -15,52 +16,78 @@ pub struct CreateProjectRequest {
     pub blocks_per_meter: f32,
 }
 
+#[derive(Debug, Clone)]
+pub struct CreateProjectFromCandidateRequest {
+    pub project_dir: PathBuf,
+    pub candidate: CampusCandidate,
+    pub minecraft_version: String,
+    pub blocks_per_meter: f32,
+}
+
 pub fn create_local_project(
     request: CreateProjectRequest,
 ) -> Result<CampusProject, CreateProjectError> {
     let generation_scale = GenerationScale::try_new(request.blocks_per_meter)?;
-    let target_existed = request.project_dir.exists();
-
-    ensure_target_is_empty_directory(&request.project_dir)?;
-
-    if !target_existed {
-        fs::create_dir_all(&request.project_dir)?;
-    }
-
-    let result = create_project_contents(&request, generation_scale);
-
-    if result.is_err() && !target_existed {
-        let _ = fs::remove_dir_all(&request.project_dir);
-    }
-
-    result
-}
-
-fn create_project_contents(
-    request: &CreateProjectRequest,
-    generation_scale: GenerationScale,
-) -> Result<CampusProject, CreateProjectError> {
-    fs::create_dir(request.project_dir.join("generated"))?;
-    fs::create_dir(request.project_dir.join("cache"))?;
-
     let project = CampusProject::new(
-        &request.school_name,
-        &request.campus_name,
-        &request.minecraft_version,
+        CampusIdentity::manual(request.school_name, request.campus_name),
+        request.minecraft_version,
         generation_scale,
     );
 
-    write_json_atomic(&request.project_dir.join("project.json"), &project)?;
+    persist_new_project(&request.project_dir, project, RealityModel::empty())
+}
+
+pub fn create_project_from_candidate(
+    request: CreateProjectFromCandidateRequest,
+) -> Result<CampusProject, CreateProjectError> {
+    let generation_scale = GenerationScale::try_new(request.blocks_per_meter)?;
+    let reality = RealityModel::from_candidate(&request.candidate);
+    let project = CampusProject::new(
+        request.candidate.identity,
+        request.minecraft_version,
+        generation_scale,
+    );
+
+    persist_new_project(&request.project_dir, project, reality)
+}
+
+fn persist_new_project(
+    project_dir: &Path,
+    project: CampusProject,
+    reality: RealityModel,
+) -> Result<CampusProject, CreateProjectError> {
+    let target_existed = project_dir.exists();
+    ensure_target_is_empty_directory(project_dir)?;
+
+    if !target_existed {
+        fs::create_dir_all(project_dir)?;
+    }
+
+    let result = create_project_contents(project_dir, &project, &reality);
+
+    if result.is_err() && !target_existed {
+        let _ = fs::remove_dir_all(project_dir);
+    }
+
+    result.map(|()| project)
+}
+
+fn create_project_contents(
+    project_dir: &Path,
+    project: &CampusProject,
+    reality: &RealityModel,
+) -> Result<(), CreateProjectError> {
+    fs::create_dir(project_dir.join("generated"))?;
+    fs::create_dir(project_dir.join("cache"))?;
+
+    write_json_atomic(&project_dir.join("project.json"), project)?;
+    write_json_atomic(&project_dir.join("reality.json"), reality)?;
     write_json_atomic(
-        &request.project_dir.join("reality.json"),
-        &RealityModel::empty(),
-    )?;
-    write_json_atomic(
-        &request.project_dir.join("objects.json"),
+        &project_dir.join("objects.json"),
         &CampusObjectCollection::empty(),
     )?;
 
-    Ok(project)
+    Ok(())
 }
 
 fn ensure_target_is_empty_directory(path: &Path) -> Result<(), CreateProjectError> {
@@ -104,6 +131,7 @@ pub enum CreateProjectError {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use campus_core::{CampusSourceReference, GeoCoordinate};
     use std::fs;
     use uuid::Uuid;
 
@@ -118,6 +146,22 @@ mod tests {
             campus_name: "Zhongbei Campus".into(),
             minecraft_version: "1.20.1".into(),
             blocks_per_meter: 1.5,
+        }
+    }
+
+    fn candidate() -> CampusCandidate {
+        CampusCandidate {
+            source: CampusSourceReference {
+                provider: "gaode".into(),
+                external_id: "B001".into(),
+            },
+            identity: CampusIdentity {
+                school_name: "华东师范大学".into(),
+                campus_name: Some("普陀校区".into()),
+                display_name: "华东师范大学(普陀校区)".into(),
+            },
+            address: "中山北路3663号".into(),
+            anchor: GeoCoordinate::try_new(121.406, 31.228).unwrap(),
         }
     }
 
@@ -140,6 +184,29 @@ mod tests {
         let restored: CampusProject =
             serde_json::from_slice(&project_json).expect("parse project.json");
         assert_eq!(created, restored);
+
+        fs::remove_dir_all(project_dir).expect("cleanup test directory");
+    }
+
+    #[test]
+    fn candidate_project_persists_source_and_anchor_in_reality_model() {
+        let project_dir = temporary_test_path("candidate");
+        let selected = candidate();
+        let created = create_project_from_candidate(CreateProjectFromCandidateRequest {
+            project_dir: project_dir.clone(),
+            candidate: selected.clone(),
+            minecraft_version: "1.20.1".into(),
+            blocks_per_meter: 1.5,
+        })
+        .expect("create candidate project");
+
+        assert_eq!(created.campus, selected.identity);
+
+        let reality_json = fs::read(project_dir.join("reality.json")).expect("read reality.json");
+        let reality: RealityModel =
+            serde_json::from_slice(&reality_json).expect("parse reality.json");
+        assert_eq!(reality.sources[0].reference, "B001");
+        assert_eq!(reality.sources[0].anchor, Some(selected.anchor));
 
         fs::remove_dir_all(project_dir).expect("cleanup test directory");
     }
