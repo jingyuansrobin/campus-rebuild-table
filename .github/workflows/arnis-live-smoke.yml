@@ -1,0 +1,76 @@
+name: arnis-live-smoke
+
+on:
+  push:
+    branches: [smoke/arnis-live]
+  workflow_dispatch:
+
+jobs:
+  live-generation:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@1.98.1
+
+      - name: Build MCRebuild CLI
+        run: cargo build -p mcrebuild-cli
+
+      - name: Download pinned Arnis v3.1.0
+        shell: bash
+        run: |
+          set -euo pipefail
+          curl --fail --location --retry 3 \
+            --output arnis-linux.tar.gz \
+            https://github.com/louis-e/arnis/releases/download/v3.1.0/arnis-linux.tar.gz
+          echo "b4a1f26e6c3f098155853d0ea0cf9e18a35074c2d278c598edd7f8e06b13c7bb  arnis-linux.tar.gz" | sha256sum --check --strict
+          mkdir arnis-bin
+          tar -xzf arnis-linux.tar.gz -C arnis-bin
+          ARNIS_BIN="$(find arnis-bin -maxdepth 2 -type f -name 'arnis*' | head -n 1)"
+          test -n "$ARNIS_BIN"
+          chmod +x "$ARNIS_BIN"
+          echo "ARNIS_EXECUTABLE=$GITHUB_WORKSPACE/$ARNIS_BIN" >> "$GITHUB_ENV"
+          "$ARNIS_BIN" --version
+
+      - name: Create tiny MCRebuild project
+        shell: bash
+        run: |
+          set -euo pipefail
+          PROJECT="$RUNNER_TEMP/mcrebuild-live-smoke"
+          echo "PROJECT=$PROJECT" >> "$GITHUB_ENV"
+          ./target/debug/mcrebuild-cli init "$PROJECT" "East China Normal University" "Live Smoke Slice" 1.0
+          ./target/debug/mcrebuild-cli set-boundary "$PROJECT" \
+            "121.4000,31.2250;121.4010,31.2250;121.4010,31.2260;121.4000,31.2260"
+
+      - name: Generate with real Arnis
+        shell: bash
+        run: |
+          set -euo pipefail
+          timeout 20m ./target/debug/mcrebuild-cli generate "$PROJECT"
+
+      - name: Verify generated world and provenance
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -f "$PROJECT/generated/world/level.dat"
+          test -f "$PROJECT/generated/world/.mcrebuild-generation.json"
+          python3 - <<'PY'
+          import json
+          import os
+          from pathlib import Path
+
+          project = Path(os.environ["PROJECT"])
+          manifest_path = project / "generated/world/.mcrebuild-generation.json"
+          manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+
+          assert manifest["generator"] == "arnis"
+          assert manifest["generation_target"] == "minecraft_java"
+          assert manifest["world_format"] == "java_anvil"
+          assert manifest["boundary_transport"] == "polygon_bounding_box"
+          assert manifest["blocks_per_meter"] == 1.0
+          assert "3.1.0" in manifest["generator_version"]
+
+          print(json.dumps(manifest, ensure_ascii=False, indent=2))
+          print("world_size_bytes=", sum(p.stat().st_size for p in (project / "generated/world").rglob("*") if p.is_file()))
+          PY
