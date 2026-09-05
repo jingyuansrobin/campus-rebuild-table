@@ -1,4 +1,10 @@
-use arnis_adapter::{ArnisAdapter, ArnisError, ArnisRunSpec};
+mod generation_lifecycle;
+
+pub use generation_lifecycle::{
+    GenerationCancellationToken, GenerationEvent, GenerationLogStream, GenerationStage,
+};
+
+use arnis_adapter::{ArnisAdapter, ArnisError, ArnisRunResult, ArnisRunSpec};
 use campus_core::{
     CampusBoundary, CampusBoundaryError, CampusCandidate, CampusIdentity, CampusObjectCollection,
     CampusProject, GenerationScale, GenerationScaleError, GenerationTarget, RealityModel,
@@ -123,6 +129,42 @@ pub fn set_project_boundary(
 pub fn generate_project_with_arnis(
     request: GenerateProjectRequest,
 ) -> Result<GenerationResult, GenerateProjectError> {
+    generate_project_with_arnis_runner(request, |adapter, spec| adapter.run(spec))
+}
+
+pub fn generate_project_with_arnis_observed<F>(
+    request: GenerateProjectRequest,
+    cancellation: &GenerationCancellationToken,
+    mut on_event: F,
+) -> Result<GenerationResult, GenerateProjectError>
+where
+    F: FnMut(GenerationEvent),
+{
+    if cancellation.is_cancelled() {
+        return Err(GenerateProjectError::Cancelled);
+    }
+
+    let result = generate_project_with_arnis_runner(request, |adapter, spec| {
+        adapter.run_with_events(spec, cancellation.arnis_token(), |event| {
+            on_event(generation_lifecycle::map_arnis_event(event));
+        })
+    });
+
+    match result {
+        Err(GenerateProjectError::Generator(ArnisError::Cancelled)) => {
+            Err(GenerateProjectError::Cancelled)
+        }
+        other => other,
+    }
+}
+
+fn generate_project_with_arnis_runner<R>(
+    request: GenerateProjectRequest,
+    run: R,
+) -> Result<GenerationResult, GenerateProjectError>
+where
+    R: FnOnce(&ArnisAdapter, &ArnisRunSpec) -> Result<ArnisRunResult, ArnisError>,
+{
     let project = read_project(&request.project_dir)?;
     ensure_supported_generation_target(project.generation_target)?;
 
@@ -143,7 +185,7 @@ pub fn generate_project_with_arnis(
     let adapter = ArnisAdapter::new(request.arnis_executable);
     let generator_version = adapter.probe_version()?;
 
-    let run_result = match adapter.run(&run_spec) {
+    let run_result = match run(&adapter, &run_spec) {
         Ok(result) => result,
         Err(error) => {
             remove_path_if_present(&staging_root);
@@ -333,6 +375,8 @@ pub enum GenerateProjectError {
     MissingBoundary,
     #[error("generated world already exists at {0}; MCRebuild will not overwrite it")]
     OutputAlreadyExists(PathBuf),
+    #[error("generation was cancelled")]
+    Cancelled,
     #[error(transparent)]
     Generator(#[from] ArnisError),
     #[error(transparent)]
@@ -538,6 +582,24 @@ mod tests {
 
         assert!(matches!(error, GenerateProjectError::MissingBoundary));
         fs::remove_dir_all(project_dir).expect("cleanup test directory");
+    }
+
+    #[test]
+    fn observed_generation_honors_pre_cancelled_token_before_launch() {
+        let cancellation = GenerationCancellationToken::new();
+        cancellation.cancel();
+
+        let error = generate_project_with_arnis_observed(
+            GenerateProjectRequest {
+                project_dir: PathBuf::from("this-project-need-not-exist"),
+                arnis_executable: PathBuf::from("definitely-not-a-real-arnis-binary"),
+            },
+            &cancellation,
+            |_| {},
+        )
+        .unwrap_err();
+
+        assert!(matches!(error, GenerateProjectError::Cancelled));
     }
 
     #[test]
