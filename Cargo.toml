@@ -3,6 +3,7 @@ resolver = "2"
 members = [
     "crates/campus-core",
     "crates/app-core",
+    "crates/gaode-search",
     "crates/arnis-adapter",
     "apps/cli",
 ]
@@ -16,6 +17,9 @@ serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 thiserror = "2"
 uuid = { version = "1", features = ["v4", "serde"] }
+ureq = "2.12"
+urlencoding = "2"
 
 campus-core = { path = "crates/campus-core" }
 app-core = { path = "crates/app-core" }
+gaode-search = { path = "crates/gaode-search" }
