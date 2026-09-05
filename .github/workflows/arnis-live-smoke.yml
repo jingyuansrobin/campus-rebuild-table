@@ -17,6 +17,19 @@ jobs:
       - name: Build MCRebuild CLI
         run: cargo build -p mcrebuild-cli
 
+      - name: Install Arnis Linux runtime dependencies
+        shell: bash
+        env:
+          DEBIAN_FRONTEND: noninteractive
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          sudo apt-get install -y \
+            libgtk-3-dev \
+            libglib2.0-dev \
+            libsoup-3.0-dev \
+            libwebkit2gtk-4.1-dev
+
       - name: Download pinned Arnis v3.1.0
         shell: bash
         run: |
@@ -30,6 +43,11 @@ jobs:
           ARNIS_BIN="$(find arnis-bin -maxdepth 2 -type f -name 'arnis*' | head -n 1)"
           test -n "$ARNIS_BIN"
           chmod +x "$ARNIS_BIN"
+          if ldd "$ARNIS_BIN" | tee arnis-ldd.txt | grep -q "not found"; then
+            echo "Arnis still has unresolved shared libraries:" >&2
+            grep "not found" arnis-ldd.txt >&2
+            exit 1
+          fi
           echo "ARNIS_EXECUTABLE=$GITHUB_WORKSPACE/$ARNIS_BIN" >> "$GITHUB_ENV"
           "$ARNIS_BIN" --version
 
