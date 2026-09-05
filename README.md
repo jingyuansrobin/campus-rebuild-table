@@ -118,7 +118,7 @@ CI 已覆盖 Windows Desktop 编译，但真实 Windows + WebView2 + 高德 JS k
 
 不要把任何高德 key 或 security code 写入源码、CampusProject 或 Git。
 
-### v0.4 — Arnis 生成闭环 🚧
+### v0.4 — Arnis 生成闭环 ✅
 
 V3 不重新实现 GIS → Minecraft 基础生成，而是通过 `arnis-adapter` 调用 Arnis 外部进程。
 
@@ -164,7 +164,33 @@ ARNIS_EXECUTABLE=<path-to-arnis>
 
 生成采用临时目录事务：失败产物留在正式 `generated/world` 之外；成功且识别到唯一包含 `level.dat` 的 Java world 后才发布。已有 `generated/world` 时默认拒绝覆盖。
 
-PR CI 会验证参数映射、输出目录契约、schema 兼容、Format / Clippy / Tests 与 Windows Desktop 编译。真正调用 Arnis 的 runtime smoke test 仍需在有 Arnis 二进制和网络数据源的环境中完成。
+除 fake-process 集成测试外，v0.4 已用固定的 Arnis v3.1.0 Linux release 做真实网络 smoke test：MCRebuild CLI 成功驱动 Arnis 获取地图 / 地形数据并发布 Minecraft Java world，生成 manifest 中的 `generator_version` 严格记录为 `3.1.0`。Live smoke 与常规 PR CI 分离，避免公共数据源或上游网络波动阻塞日常开发。
+
+### v0.5a — 可观察、可取消的生成生命周期 ✅
+
+交互式客户端不再只能阻塞等待 Arnis 结束。`app-core` 现在提供 provider-neutral 的生成生命周期接口：
+
+```text
+Desktop / CLI / future agent
+        ↓
+GenerationEvent
+  ├─ Stage(PreparingData | ProcessingMap | GeneratingWorld | SavingWorld)
+  └─ Log(stdout | stderr, raw line)
+        ↓
+app-core
+        ↓
+arnis-adapter
+        ↓
+Arnis child process
+```
+
+同时提供 clone-shared 的 `GenerationCancellationToken`。取消时 adapter 终止直接 Arnis 子进程，app-core 清理该次 staging root，并且不会发布不完整的 `generated/world`。CI 中有实际启动长时间运行 fake-Arnis 后再取消的集成测试，不只是测试一个布尔 flag。
+
+这里刻意**不提供 0–100% 数字进度**。Arnis CLI 当前只输出面向人的阶段文本，真实运行中 `[3/7]` 可能先于 `[2/7]` 出现；把这些数字直接包装成进度百分比会制造虚假精度。v0.5a 只暴露单调推进的四个粗粒度阶段和原始日志。
+
+当前取消保证针对直接 Arnis 子进程。只有在真实运行证明 Arnis 会留下需要处理的子孙进程时，才增加 Windows Job Object / Unix process group 等进程树管理；V3.0 不为假设提前建设这层复杂度。
+
+下一步是 v0.5b：把该生命周期接入 Desktop worker thread，让 Native UI 在生成期间保持响应，并提供阶段状态、日志与取消操作。
 
 ## 仓库定位
 
