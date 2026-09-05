@@ -1,6 +1,7 @@
 use app_core::{
-    create_local_project, create_project_from_candidate, set_project_boundary,
-    CreateProjectFromCandidateRequest, CreateProjectRequest, SetProjectBoundaryRequest,
+    create_local_project, create_project_from_candidate, generate_project_with_arnis,
+    set_project_boundary, CreateProjectFromCandidateRequest, CreateProjectRequest,
+    GenerateProjectRequest, SetProjectBoundaryRequest,
 };
 use campus_core::Wgs84Coordinate;
 use gaode_search::GaodeSearchClient;
@@ -29,23 +30,21 @@ fn run() -> Result<(), String> {
         "search-campus" => run_search_campus(&args[1..]),
         "init-campus" => run_init_campus(&args[1..]),
         "set-boundary" => run_set_boundary(&args[1..]),
+        "generate" => run_generate(&args[1..]),
         _ => Err(usage()),
     }
 }
 
 fn run_manual_init(args: &[String]) -> Result<(), String> {
-    if args.len() < 3 {
+    if args.len() < 3 || args.len() > 4 {
         return Err(usage());
     }
 
     let blocks_per_meter = parse_scale(args.get(3))?;
-    let minecraft_version = args.get(4).cloned().unwrap_or_else(|| "1.20.1".to_owned());
-
     let request = CreateProjectRequest {
         project_dir: PathBuf::from(&args[0]),
         school_name: args[1].clone(),
         campus_name: args[2].clone(),
-        minecraft_version,
         blocks_per_meter,
     };
 
@@ -53,7 +52,7 @@ fn run_manual_init(args: &[String]) -> Result<(), String> {
     let project = create_local_project(request).map_err(|error| error.to_string())?;
 
     println!(
-        "Created MCRebuild project for {} at {} ({} blocks/m)",
+        "Created MCRebuild project for {} at {} ({} blocks/m, Minecraft Java target)",
         project.campus.display_name,
         project_dir.display(),
         project.generation_scale.blocks_per_meter()
@@ -92,7 +91,7 @@ fn run_search_campus(args: &[String]) -> Result<(), String> {
 }
 
 fn run_init_campus(args: &[String]) -> Result<(), String> {
-    if args.len() < 3 {
+    if args.len() < 3 || args.len() > 5 {
         return Err(usage());
     }
 
@@ -100,8 +99,7 @@ fn run_init_campus(args: &[String]) -> Result<(), String> {
     let keyword = &args[1];
     let poi_id = &args[2];
     let blocks_per_meter = parse_scale(args.get(3))?;
-    let minecraft_version = args.get(4).cloned().unwrap_or_else(|| "1.20.1".to_owned());
-    let region = args.get(5).map(String::as_str);
+    let region = args.get(4).map(String::as_str);
 
     let client = gaode_client()?;
     let candidates = client
@@ -115,13 +113,12 @@ fn run_init_campus(args: &[String]) -> Result<(), String> {
     let project = create_project_from_candidate(CreateProjectFromCandidateRequest {
         project_dir: project_dir.clone(),
         candidate,
-        minecraft_version,
         blocks_per_meter,
     })
     .map_err(|error| error.to_string())?;
 
     println!(
-        "Created MCRebuild project for {} at {} ({} blocks/m)",
+        "Created MCRebuild project for {} at {} ({} blocks/m, Minecraft Java target)",
         project.campus.display_name,
         project_dir.display(),
         project.generation_scale.blocks_per_meter()
@@ -158,6 +155,30 @@ fn run_set_boundary(args: &[String]) -> Result<(), String> {
         bbox.max_longitude
     );
 
+    Ok(())
+}
+
+fn run_generate(args: &[String]) -> Result<(), String> {
+    if args.len() != 1 {
+        return Err(usage());
+    }
+
+    let project_dir = PathBuf::from(&args[0]);
+    let arnis_executable = env::var_os("ARNIS_EXECUTABLE")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| PathBuf::from("arnis"));
+    let result = generate_project_with_arnis(GenerateProjectRequest {
+        project_dir,
+        arnis_executable,
+    })
+    .map_err(|error| error.to_string())?;
+
+    println!(
+        "Generated Minecraft Java world at {} using {}",
+        result.world_dir.display(),
+        result.generator_version
+    );
+    println!("Generation metadata: {}", result.manifest_path.display());
     Ok(())
 }
 
@@ -201,14 +222,17 @@ fn parse_scale(value: Option<&String>) -> Result<f32, String> {
 fn usage() -> String {
     concat!(
         "Usage:\n",
-        "  mcrebuild-cli init <project_dir> <school_name> <campus_name> [blocks_per_meter] [minecraft_version]\n",
+        "  mcrebuild-cli init <project_dir> <school_name> <campus_name> [blocks_per_meter]\n",
         "  mcrebuild-cli search-campus <keyword> [region]\n",
-        "  mcrebuild-cli init-campus <project_dir> <keyword> <poi_id> [blocks_per_meter] [minecraft_version] [region]\n",
-        "  mcrebuild-cli set-boundary <project_dir> \"lon,lat;lon,lat;lon,lat;...\"\n\n",
+        "  mcrebuild-cli init-campus <project_dir> <keyword> <poi_id> [blocks_per_meter] [region]\n",
+        "  mcrebuild-cli set-boundary <project_dir> \"lon,lat;lon,lat;lon,lat;...\"\n",
+        "  mcrebuild-cli generate <project_dir>\n\n",
         "AMap commands require AMAP_WEB_SERVICE_KEY.\n",
+        "Generation uses ARNIS_EXECUTABLE when configured, otherwise `arnis` from PATH.\n",
         "All boundary coordinates are WGS-84.\n",
+        "The project targets Minecraft Java; the concrete world format is controlled by the Arnis binary.\n",
         "Example:\n",
-        "  mcrebuild-cli set-boundary ./ecnu \"121.398,31.222;121.414,31.222;121.414,31.234;121.398,31.234\""
+        "  mcrebuild-cli generate ./ecnu"
     )
     .to_owned()
 }

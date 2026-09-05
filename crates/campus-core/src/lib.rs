@@ -2,7 +2,7 @@ use serde::{Deserialize, Deserializer, Serialize};
 use thiserror::Error;
 use uuid::Uuid;
 
-pub const PROJECT_SCHEMA_VERSION: u32 = 3;
+pub const PROJECT_SCHEMA_VERSION: u32 = 4;
 pub const REALITY_SCHEMA_VERSION: u32 = 3;
 pub const OBJECTS_SCHEMA_VERSION: u32 = 1;
 
@@ -61,6 +61,18 @@ impl<'de> Deserialize<'de> for GenerationScale {
 #[error("generation scale must be between 1.0 and 2.5 blocks/m, got {blocks_per_meter}")]
 pub struct GenerationScaleError {
     blocks_per_meter: f32,
+}
+
+/// Product-level generation target.
+///
+/// V3.0 targets Minecraft Java, but intentionally does not promise an arbitrary
+/// Minecraft version. The concrete world format is controlled by the selected
+/// generator binary and belongs to generated-artifact metadata, not project intent.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum GenerationTarget {
+    #[default]
+    MinecraftJava,
 }
 
 /// Provider-neutral geographic coordinate used by MCRebuild core.
@@ -279,23 +291,20 @@ pub struct CampusProject {
     pub schema_version: u32,
     pub id: ProjectId,
     pub campus: CampusIdentity,
-    pub minecraft_version: String,
+    #[serde(default)]
+    pub generation_target: GenerationTarget,
     pub generation_scale: GenerationScale,
     #[serde(default)]
     pub boundary: Option<CampusBoundary>,
 }
 
 impl CampusProject {
-    pub fn new(
-        campus: CampusIdentity,
-        minecraft_version: impl Into<String>,
-        generation_scale: GenerationScale,
-    ) -> Self {
+    pub fn new(campus: CampusIdentity, generation_scale: GenerationScale) -> Self {
         Self {
             schema_version: PROJECT_SCHEMA_VERSION,
             id: ProjectId::new(),
             campus,
-            minecraft_version: minecraft_version.into(),
+            generation_target: GenerationTarget::MinecraftJava,
             generation_scale,
             boundary: None,
         }
@@ -601,7 +610,6 @@ mod tests {
     fn project_round_trip_revalidates_boundary() {
         let mut project = CampusProject::new(
             CampusIdentity::manual("华东师范大学", "普陀校区"),
-            "1.20.1",
             GenerationScale::try_new(1.5).unwrap(),
         );
         project.set_boundary(ecnu_like_boundary());
@@ -609,22 +617,47 @@ mod tests {
         let json = serde_json::to_vec(&project).unwrap();
         let restored: CampusProject = serde_json::from_slice(&json).unwrap();
         assert_eq!(project, restored);
+        assert_eq!(restored.generation_target, GenerationTarget::MinecraftJava);
+    }
+
+    #[test]
+    fn legacy_project_version_field_is_ignored_and_upgraded_on_write() {
+        let project = CampusProject::new(
+            CampusIdentity::manual("华东师范大学", "普陀校区"),
+            GenerationScale::try_new(1.5).unwrap(),
+        );
+        let mut value = serde_json::to_value(project).unwrap();
+        value["schema_version"] = serde_json::json!(3);
+        value.as_object_mut().unwrap().remove("generation_target");
+        value["minecraft_version"] = serde_json::json!("1.20.1");
+
+        let mut restored: CampusProject = serde_json::from_value(value).unwrap();
+        assert_eq!(restored.schema_version, 3);
+        assert_eq!(restored.generation_target, GenerationTarget::MinecraftJava);
+
+        restored.set_boundary(ecnu_like_boundary());
+        assert_eq!(restored.schema_version, PROJECT_SCHEMA_VERSION);
+        let rewritten = serde_json::to_value(restored).unwrap();
+        assert!(rewritten.get("minecraft_version").is_none());
+        assert_eq!(rewritten["generation_target"], "minecraft_java");
     }
 
     #[test]
     fn v2_project_without_boundary_can_be_loaded_and_upgraded() {
         let project = CampusProject::new(
             CampusIdentity::manual("华东师范大学", "普陀校区"),
-            "1.20.1",
             GenerationScale::try_new(1.5).unwrap(),
         );
         let mut value = serde_json::to_value(project).unwrap();
         value["schema_version"] = serde_json::json!(2);
         value.as_object_mut().unwrap().remove("boundary");
+        value.as_object_mut().unwrap().remove("generation_target");
+        value["minecraft_version"] = serde_json::json!("1.20.1");
 
         let mut restored: CampusProject = serde_json::from_value(value).unwrap();
         assert_eq!(restored.schema_version, 2);
         assert!(restored.boundary.is_none());
+        assert_eq!(restored.generation_target, GenerationTarget::MinecraftJava);
 
         restored.set_boundary(ecnu_like_boundary());
         assert_eq!(restored.schema_version, PROJECT_SCHEMA_VERSION);
