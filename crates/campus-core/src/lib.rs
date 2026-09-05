@@ -281,6 +281,7 @@ pub struct CampusProject {
     pub campus: CampusIdentity,
     pub minecraft_version: String,
     pub generation_scale: GenerationScale,
+    #[serde(default)]
     pub boundary: Option<CampusBoundary>,
 }
 
@@ -301,11 +302,12 @@ impl CampusProject {
     }
 
     pub fn set_boundary(&mut self, boundary: CampusBoundary) {
+        self.schema_version = PROJECT_SCHEMA_VERSION;
         self.boundary = Some(boundary);
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct RealityModel {
     pub schema_version: u32,
     pub sources: Vec<RealitySource>,
@@ -330,6 +332,32 @@ impl RealityModel {
                 anchor: Some(candidate.anchor),
             }],
         }
+    }
+}
+
+impl<'de> Deserialize<'de> for RealityModel {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        #[derive(Deserialize)]
+        struct RawRealityModel {
+            schema_version: u32,
+            sources: Vec<RealitySource>,
+        }
+
+        let raw = RawRealityModel::deserialize(deserializer)?;
+        if raw.schema_version != REALITY_SCHEMA_VERSION {
+            return Err(serde::de::Error::custom(format!(
+                "unsupported reality schema version {}; expected {} because v3 stores WGS-84 coordinates",
+                raw.schema_version, REALITY_SCHEMA_VERSION
+            )));
+        }
+
+        Ok(Self {
+            schema_version: raw.schema_version,
+            sources: raw.sources,
+        })
     }
 }
 
@@ -581,6 +609,34 @@ mod tests {
         let json = serde_json::to_vec(&project).unwrap();
         let restored: CampusProject = serde_json::from_slice(&json).unwrap();
         assert_eq!(project, restored);
+    }
+
+    #[test]
+    fn v2_project_without_boundary_can_be_loaded_and_upgraded() {
+        let project = CampusProject::new(
+            CampusIdentity::manual("华东师范大学", "普陀校区"),
+            "1.20.1",
+            GenerationScale::try_new(1.5).unwrap(),
+        );
+        let mut value = serde_json::to_value(project).unwrap();
+        value["schema_version"] = serde_json::json!(2);
+        value.as_object_mut().unwrap().remove("boundary");
+
+        let mut restored: CampusProject = serde_json::from_value(value).unwrap();
+        assert_eq!(restored.schema_version, 2);
+        assert!(restored.boundary.is_none());
+
+        restored.set_boundary(ecnu_like_boundary());
+        assert_eq!(restored.schema_version, PROJECT_SCHEMA_VERSION);
+        assert!(restored.boundary.is_some());
+    }
+
+    #[test]
+    fn old_reality_schema_is_rejected_instead_of_misreading_gcj02_as_wgs84() {
+        let mut value = serde_json::to_value(RealityModel::empty()).unwrap();
+        value["schema_version"] = serde_json::json!(2);
+        let error = serde_json::from_value::<RealityModel>(value).unwrap_err();
+        assert!(error.to_string().contains("WGS-84"));
     }
 
     #[test]
