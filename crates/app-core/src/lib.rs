@@ -11,7 +11,7 @@ use thiserror::Error;
 use uuid::Uuid;
 
 const GENERATION_MANIFEST_SCHEMA_VERSION: u32 = 1;
-const AR NIS_GENERATION_MODE: &str = "geo-terrain";
+const ARNIS_GENERATION_MODE: &str = "geo-terrain";
 
 #[derive(Debug, Clone)]
 pub struct CreateProjectRequest {
