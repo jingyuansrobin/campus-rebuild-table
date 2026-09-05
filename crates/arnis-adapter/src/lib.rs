@@ -1,3 +1,9 @@
+mod lifecycle;
+
+pub use lifecycle::{
+    ArnisCancellationToken, ArnisEvent, ArnisLogStream, ArnisStage,
+};
+
 use campus_core::{GenerationScale, Wgs84BoundingBox};
 use std::ffi::{OsStr, OsString};
 use std::fs;
@@ -44,11 +50,10 @@ impl ArnisAdapter {
         }
     }
 
-    /// Run Arnis and resolve the Java world directory it creates below `output_dir`.
+    /// Blocking compatibility entry point used by simple headless callers.
     ///
-    /// Arnis currently treats `--output-dir` as a parent directory for Java worlds and
-    /// creates a child such as `Arnis World 1`. This provider-specific behavior is kept
-    /// inside the adapter so MCRebuild application code never depends on that naming scheme.
+    /// Interactive callers should prefer `run_with_events` so the work can run on a worker
+    /// thread while the UI receives logs/stages and can request cancellation.
     pub fn run(&self, spec: &ArnisRunSpec) -> Result<ArnisRunResult, ArnisError> {
         fs::create_dir_all(&spec.output_dir).map_err(|source| ArnisError::PrepareOutput {
             output_dir: spec.output_dir.clone(),
@@ -193,6 +198,18 @@ pub enum ArnisError {
         #[source]
         source: std::io::Error,
     },
+    #[error("Arnis process wait failed: {0}")]
+    Wait(#[source] std::io::Error),
+    #[error("Arnis process did not expose expected {stream} pipe")]
+    MissingOutputPipe { stream: &'static str },
+    #[error("failed reading Arnis {stream:?}: {source}")]
+    ReadOutput {
+        stream: ArnisLogStream,
+        #[source]
+        source: std::io::Error,
+    },
+    #[error("Arnis generation was cancelled")]
+    Cancelled,
     #[error("Arnis exited unsuccessfully with code {code:?}")]
     NonZeroExit { code: Option<i32> },
     #[error("Arnis --version exited unsuccessfully with code {code:?}")]
