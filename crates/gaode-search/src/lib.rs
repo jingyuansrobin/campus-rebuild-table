@@ -34,9 +34,7 @@ impl GaodeSearchClient {
             ureq::Error::Status(code, _) => SearchError::HttpStatus(code),
             ureq::Error::Transport(_) => SearchError::Transport,
         })?;
-        let body = response
-            .into_string()
-            .map_err(|_| SearchError::Transport)?;
+        let body = response.into_string().map_err(|_| SearchError::Transport)?;
 
         parse_search_response(&body)
     }
@@ -206,7 +204,8 @@ fn trailing_campus_parentheses(display_name: &str) -> Option<(String, String)> {
             continue;
         }
         let open_index = display_name.rfind(open)?;
-        let campus_name = display_name[open_index + open.len_utf8()..display_name.len() - close.len_utf8()]
+        let campus_name = display_name
+            [open_index + open.len_utf8()..display_name.len() - close.len_utf8()]
             .trim();
         let school_name = display_name[..open_index].trim();
         if !school_name.is_empty() && is_campus_label(campus_name) {
@@ -286,7 +285,10 @@ mod tests {
         let candidates = parse_search_response(&json).unwrap();
         assert_eq!(candidates.len(), 1);
         assert_eq!(candidates[0].identity.school_name, "华东师范大学");
-        assert_eq!(candidates[0].identity.campus_name.as_deref(), Some("普陀校区"));
+        assert_eq!(
+            candidates[0].identity.campus_name.as_deref(),
+            Some("普陀校区")
+        );
         assert_eq!(candidates[0].source.external_id, "B01");
     }
 
