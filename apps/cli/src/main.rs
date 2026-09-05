@@ -37,10 +37,7 @@ fn run_manual_init(args: &[String]) -> Result<(), String> {
     }
 
     let blocks_per_meter = parse_scale(args.get(3))?;
-    let minecraft_version = args
-        .get(4)
-        .cloned()
-        .unwrap_or_else(|| "1.20.1".to_owned());
+    let minecraft_version = args.get(4).cloned().unwrap_or_else(|| "1.20.1".to_owned());
 
     let request = CreateProjectRequest {
         project_dir: PathBuf::from(&args[0]),
@@ -101,10 +98,7 @@ fn run_init_campus(args: &[String]) -> Result<(), String> {
     let keyword = &args[1];
     let poi_id = &args[2];
     let blocks_per_meter = parse_scale(args.get(3))?;
-    let minecraft_version = args
-        .get(4)
-        .cloned()
-        .unwrap_or_else(|| "1.20.1".to_owned());
+    let minecraft_version = args.get(4).cloned().unwrap_or_else(|| "1.20.1".to_owned());
     let region = args.get(5).map(String::as_str);
 
     let client = gaode_client()?;
