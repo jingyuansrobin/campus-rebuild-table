@@ -1,8 +1,6 @@
 #[cfg(target_os = "windows")]
 mod windows_app {
-    use app_core::{
-        load_boundary_editor_context, set_project_boundary, SetProjectBoundaryRequest,
-    };
+    use app_core::{load_boundary_editor_context, set_project_boundary, SetProjectBoundaryRequest};
     use gaode_map::{
         build_boundary_editor_html, parse_boundary_map_event, BoundaryMapConfig, BoundaryMapEvent,
     };
@@ -31,11 +29,7 @@ mod windows_app {
     }
 
     impl BoundaryEditorApp {
-        fn new(
-            project_dir: PathBuf,
-            html: String,
-            proxy: EventLoopProxy<UserEvent>,
-        ) -> Self {
+        fn new(project_dir: PathBuf, html: String, proxy: EventLoopProxy<UserEvent>) -> Self {
             Self {
                 project_dir,
                 html,
@@ -70,10 +64,7 @@ mod windows_app {
                                 .as_ref()
                                 .map(|boundary| boundary.area_m2())
                                 .unwrap_or_default();
-                            self.report_to_page(format!(
-                                "边界已保存，面积约 {:.0} m²。",
-                                area_m2
-                            ));
+                            self.report_to_page(format!("边界已保存，面积约 {:.0} m²。", area_m2));
                         }
                         Err(error) => self.report_to_page(format!("边界无效：{error}")),
                     }
