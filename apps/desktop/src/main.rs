@@ -149,13 +149,10 @@ mod windows_app {
             let proxy = self.proxy.clone();
             thread::spawn(move || {
                 let event_proxy = proxy.clone();
-                let result = generate_project_with_arnis_observed(
-                    request,
-                    &cancellation,
-                    move |event| {
+                let result =
+                    generate_project_with_arnis_observed(request, &cancellation, move |event| {
                         let _ = event_proxy.send_event(UserEvent::Generation(event));
-                    },
-                );
+                    });
                 let cancelled = matches!(&result, Err(GenerateProjectError::Cancelled));
                 let result = result.map_err(|error| error.to_string());
                 let _ = proxy.send_event(UserEvent::GenerationFinished { result, cancelled });
@@ -201,9 +198,7 @@ mod windows_app {
                 Ok(BoundaryMapEvent::Cancel) => self.request_exit(event_loop),
                 Ok(BoundaryMapEvent::SubmitBoundary(vertices)) => {
                     if self.generation_token.is_some() {
-                        self.report_to_page(
-                            "生成进行中不能修改项目边界；请先等待完成或取消生成。",
-                        );
+                        self.report_to_page("生成进行中不能修改项目边界；请先等待完成或取消生成。");
                         return;
                     }
 
@@ -246,7 +241,7 @@ mod windows_app {
                         "worldDir": result.world_dir.to_string_lossy(),
                     }));
                 }
-                Err(error) if cancelled => {
+                Err(_) if cancelled => {
                     self.report_generation_update(serde_json::json!({
                         "kind": "finished",
                         "status": "生成已取消，临时文件已清理。",
@@ -370,13 +365,8 @@ mod windows_app {
 
         let event_loop = EventLoop::<UserEvent>::with_user_event().build()?;
         let proxy = event_loop.create_proxy();
-        let mut app = BoundaryEditorApp::new(
-            project_dir,
-            arnis_executable,
-            html,
-            boundary_ready,
-            proxy,
-        );
+        let mut app =
+            BoundaryEditorApp::new(project_dir, arnis_executable, html, boundary_ready, proxy);
         event_loop.run_app(&mut app)?;
         Ok(())
     }
