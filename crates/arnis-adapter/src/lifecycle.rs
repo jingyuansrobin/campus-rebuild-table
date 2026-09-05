@@ -99,12 +99,14 @@ impl ArnisAdapter {
                 source,
             })?;
 
-        let stdout = child.stdout.take().ok_or(ArnisError::MissingOutputPipe {
-            stream: "stdout",
-        })?;
-        let stderr = child.stderr.take().ok_or(ArnisError::MissingOutputPipe {
-            stream: "stderr",
-        })?;
+        let stdout = child
+            .stdout
+            .take()
+            .ok_or(ArnisError::MissingOutputPipe { stream: "stdout" })?;
+        let stderr = child
+            .stderr
+            .take()
+            .ok_or(ArnisError::MissingOutputPipe { stream: "stderr" })?;
 
         let (tx, rx) = mpsc::channel();
         let stdout_reader = spawn_pipe_reader(stdout, ArnisLogStream::Stdout, tx.clone());
@@ -114,24 +116,14 @@ impl ArnisAdapter {
         let mut latest_stage = None;
         let mut read_error = None;
         let status = loop {
-            drain_messages(
-                &rx,
-                &mut latest_stage,
-                &mut read_error,
-                &mut on_event,
-            );
+            drain_messages(&rx, &mut latest_stage, &mut read_error, &mut on_event);
 
             if cancellation.is_cancelled() {
                 let _ = child.kill();
                 let _ = child.wait();
                 join_reader(stdout_reader);
                 join_reader(stderr_reader);
-                drain_messages(
-                    &rx,
-                    &mut latest_stage,
-                    &mut read_error,
-                    &mut on_event,
-                );
+                drain_messages(&rx, &mut latest_stage, &mut read_error, &mut on_event);
                 return Err(ArnisError::Cancelled);
             }
 
@@ -143,12 +135,7 @@ impl ArnisAdapter {
 
         join_reader(stdout_reader);
         join_reader(stderr_reader);
-        drain_messages(
-            &rx,
-            &mut latest_stage,
-            &mut read_error,
-            &mut on_event,
-        );
+        drain_messages(&rx, &mut latest_stage, &mut read_error, &mut on_event);
 
         if let Some((stream, source)) = read_error {
             return Err(ArnisError::ReadOutput { stream, source });
