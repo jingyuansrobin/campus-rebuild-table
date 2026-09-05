@@ -92,13 +92,9 @@ impl ArnisAdapter {
             });
         }
 
-        let stdout = String::from_utf8_lossy(&output.stdout).trim().to_owned();
-        let stderr = String::from_utf8_lossy(&output.stderr).trim().to_owned();
-        let version = if stdout.is_empty() { stderr } else { stdout };
-        if version.is_empty() {
-            return Err(ArnisError::EmptyVersion);
-        }
-        Ok(version)
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        parse_version_output(&stdout, &stderr).ok_or(ArnisError::UnrecognizedVersionOutput)
     }
 }
 
@@ -140,6 +136,17 @@ impl ArnisCommandPlan {
     pub fn contains_arg(&self, arg: impl AsRef<OsStr>) -> bool {
         self.args.iter().any(|value| value == arg.as_ref())
     }
+}
+
+fn parse_version_output(stdout: &str, stderr: &str) -> Option<String> {
+    parse_version_text(stdout).or_else(|| parse_version_text(stderr))
+}
+
+fn parse_version_text(text: &str) -> Option<String> {
+    text.lines().rev().find_map(|line| {
+        let version = line.trim().strip_prefix("arnis ")?.trim();
+        (!version.is_empty()).then(|| version.to_owned())
+    })
 }
 
 fn discover_java_world(output_dir: &Path) -> Result<PathBuf, ArnisError> {
@@ -190,8 +197,8 @@ pub enum ArnisError {
     NonZeroExit { code: Option<i32> },
     #[error("Arnis --version exited unsuccessfully with code {code:?}")]
     VersionProbeFailed { code: Option<i32> },
-    #[error("Arnis --version returned no version text")]
-    EmptyVersion,
+    #[error("Arnis --version output did not contain a recognizable `arnis <version>` line")]
+    UnrecognizedVersionOutput,
     #[error("failed to inspect Arnis output directory {output_dir}: {source}")]
     ScanOutput {
         output_dir: PathBuf,
@@ -258,6 +265,32 @@ mod tests {
         assert!(!plan.contains_arg("--minecraft-version"));
         assert!(!plan.contains_arg("--polygon"));
         assert!(plan.contains_arg("--bbox"));
+    }
+
+    #[test]
+    fn version_parser_extracts_semantic_value_from_release_banner() {
+        let stdout = r#"
+        ▄████████    ▄████████ ███▄▄▄▄    ▄█     ▄████████
+
+                          version 3.1.0
+                https://github.com/louis-e/arnis
+
+arnis 3.1.0
+"#;
+
+        assert_eq!(
+            parse_version_output(stdout, ""),
+            Some("3.1.0".to_owned())
+        );
+    }
+
+    #[test]
+    fn version_parser_accepts_stderr_fallback_and_rejects_unrecognized_output() {
+        assert_eq!(
+            parse_version_output("", "arnis 9.9.9-test\n"),
+            Some("9.9.9-test".to_owned())
+        );
+        assert_eq!(parse_version_output("version 3.1.0", ""), None);
     }
 
     #[test]
