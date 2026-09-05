@@ -148,16 +148,16 @@ impl CampusBoundary {
         }
 
         let projected = project_to_local_meters(&vertices);
+        if let Some((edge_a, edge_b)) = first_self_intersection(&projected) {
+            return Err(CampusBoundaryError::SelfIntersecting { edge_a, edge_b });
+        }
+
         let area_m2 = polygon_area_m2(&projected);
         if area_m2 < MIN_BOUNDARY_AREA_M2 {
             return Err(CampusBoundaryError::AreaTooSmall {
                 area_m2,
                 minimum_m2: MIN_BOUNDARY_AREA_M2,
             });
-        }
-
-        if let Some((edge_a, edge_b)) = first_self_intersection(&projected) {
-            return Err(CampusBoundaryError::SelfIntersecting { edge_a, edge_b });
         }
 
         Ok(Self { vertices })
@@ -220,7 +220,7 @@ pub enum CampusBoundaryError {
     SelfIntersecting { edge_a: usize, edge_b: usize },
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Serialize)]
 pub struct Wgs84BoundingBox {
     pub min_longitude: f64,
     pub min_latitude: f64,
@@ -432,7 +432,12 @@ fn first_self_intersection(vertices: &[ProjectedPoint]) -> Option<(usize, usize)
     None
 }
 
-fn segments_intersect(a: ProjectedPoint, b: ProjectedPoint, c: ProjectedPoint, d: ProjectedPoint) -> bool {
+fn segments_intersect(
+    a: ProjectedPoint,
+    b: ProjectedPoint,
+    c: ProjectedPoint,
+    d: ProjectedPoint,
+) -> bool {
     let ab_c = cross(a, b, c);
     let ab_d = cross(a, b, d);
     let cd_a = cross(c, d, a);
@@ -535,7 +540,10 @@ mod tests {
         ])
         .unwrap_err();
 
-        assert!(matches!(error, CampusBoundaryError::SelfIntersecting { .. }));
+        assert!(matches!(
+            error,
+            CampusBoundaryError::SelfIntersecting { .. }
+        ));
     }
 
     #[test]
