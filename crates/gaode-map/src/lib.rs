@@ -61,7 +61,7 @@ pub fn build_boundary_editor_html(config: &BoundaryMapConfig) -> Result<String, 
         return Err(BoundaryMapError::MissingSecurityCode);
     }
 
-    let anchor_gcj02 = wgs84_to_gcj02(config.anchor);
+    let (anchor_lon, anchor_lat) = wgs84_to_gcj02(config.anchor);
     let existing_boundary_gcj02 = config.existing_boundary.as_ref().map(|boundary| {
         boundary
             .vertices()
@@ -71,38 +71,38 @@ pub fn build_boundary_editor_html(config: &BoundaryMapConfig) -> Result<String, 
             .map(|(longitude, latitude)| [longitude, latitude])
             .collect()
     });
-
     let bootstrap = BoundaryBootstrap {
         security_code: config.security_code.clone(),
         campus_display_name: config.campus_display_name.clone(),
-        anchor_gcj02: [anchor_gcj02.0, anchor_gcj02.1],
+        anchor_gcj02: [anchor_lon, anchor_lat],
         existing_boundary_gcj02,
     };
-    let bootstrap_json = serde_json::to_string(&bootstrap)
+    let json = serde_json::to_string(&bootstrap)
         .map_err(|error| BoundaryMapError::InvalidMessage(error.to_string()))?;
-    let bootstrap_json = escape_json_for_script_element(&bootstrap_json);
-    let encoded_key = urlencoding::encode(js_api_key);
+    let safe_json = json
+        .replace('&', "\\u0026")
+        .replace('<', "\\u003c")
+        .replace('>', "\\u003e");
 
     Ok(BOUNDARY_EDITOR_HTML
-        .replace("__BOOTSTRAP_JSON__", &bootstrap_json)
-        .replace("__AMAP_JS_KEY__", encoded_key.as_ref()))
+        .replace("__BOOTSTRAP_JSON__", &safe_json)
+        .replace("__AMAP_JS_KEY__", urlencoding::encode(js_api_key).as_ref()))
 }
 
 pub fn parse_boundary_map_event(message: &str) -> Result<BoundaryMapEvent, BoundaryMapError> {
     let raw: RawBoundaryMapEvent = serde_json::from_str(message)
         .map_err(|error| BoundaryMapError::InvalidMessage(error.to_string()))?;
-
     match raw {
         RawBoundaryMapEvent::Ready => Ok(BoundaryMapEvent::Ready),
         RawBoundaryMapEvent::Cancel => Ok(BoundaryMapEvent::Cancel),
         RawBoundaryMapEvent::SubmitBoundary { coordinates } => {
             let mut vertices = Vec::with_capacity(coordinates.len());
             for (index, [longitude, latitude]) in coordinates.into_iter().enumerate() {
-                if !valid_geographic_pair(longitude, latitude) {
+                if !is_valid_pair(longitude, latitude) {
                     return Err(BoundaryMapError::InvalidCoordinate { index });
                 }
-                let (wgs_longitude, wgs_latitude) = gcj02_to_wgs84(longitude, latitude);
-                let coordinate = Wgs84Coordinate::try_new(wgs_longitude, wgs_latitude)
+                let (wgs_lon, wgs_lat) = gcj02_to_wgs84(longitude, latitude);
+                let coordinate = Wgs84Coordinate::try_new(wgs_lon, wgs_lat)
                     .map_err(|_| BoundaryMapError::InvalidCoordinate { index })?;
                 vertices.push(coordinate);
             }
@@ -111,13 +111,7 @@ pub fn parse_boundary_map_event(message: &str) -> Result<BoundaryMapEvent, Bound
     }
 }
 
-fn escape_json_for_script_element(json: &str) -> String {
-    json.replace('&', "\\u0026")
-        .replace('<', "\\u003c")
-        .replace('>', "\\u003e")
-}
-
-fn valid_geographic_pair(longitude: f64, latitude: f64) -> bool {
+fn is_valid_pair(longitude: f64, latitude: f64) -> bool {
     longitude.is_finite()
         && latitude.is_finite()
         && (-180.0..=180.0).contains(&longitude)
@@ -132,35 +126,30 @@ fn wgs84_pair_to_gcj02(longitude: f64, latitude: f64) -> (f64, f64) {
     if out_of_china(longitude, latitude) {
         return (longitude, latitude);
     }
-
-    let delta_latitude = transform_latitude(longitude - 105.0, latitude - 35.0);
-    let delta_longitude = transform_longitude(longitude - 105.0, latitude - 35.0);
-    let latitude_radians = latitude.to_radians();
-    let sin_latitude = latitude_radians.sin();
-    let magic = 1.0 - KRASOVSKY_EE * sin_latitude * sin_latitude;
+    let d_lat = transform_latitude(longitude - 105.0, latitude - 35.0);
+    let d_lon = transform_longitude(longitude - 105.0, latitude - 35.0);
+    let rad_lat = latitude.to_radians();
+    let sin_lat = rad_lat.sin();
+    let magic = 1.0 - KRASOVSKY_EE * sin_lat * sin_lat;
     let sqrt_magic = magic.sqrt();
-    let adjusted_latitude = (delta_latitude * 180.0)
+    let d_lat = (d_lat * 180.0)
         / ((KRASOVSKY_A * (1.0 - KRASOVSKY_EE)) / (magic * sqrt_magic) * PI);
-    let adjusted_longitude =
-        (delta_longitude * 180.0) / (KRASOVSKY_A / sqrt_magic * latitude_radians.cos() * PI);
-
-    (longitude + adjusted_longitude, latitude + adjusted_latitude)
+    let d_lon = (d_lon * 180.0) / (KRASOVSKY_A / sqrt_magic * rad_lat.cos() * PI);
+    (longitude + d_lon, latitude + d_lat)
 }
 
 fn gcj02_to_wgs84(gcj_longitude: f64, gcj_latitude: f64) -> (f64, f64) {
     if out_of_china(gcj_longitude, gcj_latitude) {
         return (gcj_longitude, gcj_latitude);
     }
-
-    let mut wgs_longitude = gcj_longitude;
-    let mut wgs_latitude = gcj_latitude;
+    let mut wgs_lon = gcj_longitude;
+    let mut wgs_lat = gcj_latitude;
     for _ in 0..GCJ_INVERSE_ITERATIONS {
-        let (estimated_longitude, estimated_latitude) =
-            wgs84_pair_to_gcj02(wgs_longitude, wgs_latitude);
-        wgs_longitude -= estimated_longitude - gcj_longitude;
-        wgs_latitude -= estimated_latitude - gcj_latitude;
+        let (estimated_lon, estimated_lat) = wgs84_pair_to_gcj02(wgs_lon, wgs_lat);
+        wgs_lon -= estimated_lon - gcj_longitude;
+        wgs_lat -= estimated_lat - gcj_latitude;
     }
-    (wgs_longitude, wgs_latitude)
+    (wgs_lon, wgs_lat)
 }
 
 fn out_of_china(longitude: f64, latitude: f64) -> bool {
@@ -184,111 +173,30 @@ fn transform_longitude(x: f64, y: f64) -> f64 {
 }
 
 const BOUNDARY_EDITOR_HTML: &str = r#"<!doctype html>
-<html lang="zh-CN">
-<head>
-<meta charset="utf-8">
-<meta name="viewport" content="width=device-width,initial-scale=1">
+<html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <title>MCRebuild 边界编辑</title>
 <style>
 html,body{height:100%;margin:0;font-family:system-ui,-apple-system,"Segoe UI",sans-serif;background:#f5f6f8;color:#1f2328}
-#app{height:100%;display:grid;grid-template-columns:280px 1fr}
-#panel{box-sizing:border-box;padding:22px;background:#fff;border-right:1px solid #e5e7eb;display:flex;flex-direction:column;gap:16px}
-#campus{font-size:18px;font-weight:650;line-height:1.35}
-#hint,#status{font-size:13px;line-height:1.55;color:#59636e}
-#status{padding:10px 12px;border-radius:8px;background:#f3f4f6}
-.actions{display:grid;gap:10px;margin-top:auto}
-button{border:1px solid #cfd5dc;border-radius:8px;padding:10px 12px;background:#fff;font-size:14px;cursor:pointer}
-button.primary{border-color:#2563eb;background:#2563eb;color:#fff}
-button:disabled{opacity:.45;cursor:not-allowed}
-#map{height:100%;min-width:0}
+#app{height:100%;display:grid;grid-template-columns:280px 1fr}#panel{box-sizing:border-box;padding:22px;background:#fff;border-right:1px solid #e5e7eb;display:flex;flex-direction:column;gap:16px}
+#campus{font-size:18px;font-weight:650;line-height:1.35}#hint,#status{font-size:13px;line-height:1.55;color:#59636e}#status{padding:10px 12px;border-radius:8px;background:#f3f4f6}
+.actions{display:grid;gap:10px;margin-top:auto}button{border:1px solid #cfd5dc;border-radius:8px;padding:10px 12px;background:#fff;font-size:14px;cursor:pointer}button.primary{border-color:#2563eb;background:#2563eb;color:#fff}button:disabled{opacity:.45;cursor:not-allowed}#map{height:100%;min-width:0}
 </style>
 <script id="mcrebuild-bootstrap" type="application/json">__BOOTSTRAP_JSON__</script>
-<script>
-const bootstrap=JSON.parse(document.getElementById('mcrebuild-bootstrap').textContent);
-window._AMapSecurityConfig={securityJsCode:bootstrap.securityCode};
-</script>
-<script src="https://webapi.amap.com/maps?v=2.0&key=__AMAP_JS_KEY__&plugin=AMap.MouseTool,AMap.PolygonEditor"></script>
-</head>
-<body>
-<div id="app">
-  <aside id="panel">
-    <div>
-      <div id="campus"></div>
-      <div id="hint">拖动顶点可修正边界；需要重新圈选时点击“重新圈画”。边界有效性由 MCRebuild Core 最终校验。</div>
-    </div>
-    <div id="status">正在加载地图…</div>
-    <div class="actions">
-      <button id="redraw">重新圈画</button>
-      <button id="save" class="primary" disabled>保存边界</button>
-      <button id="cancel">关闭</button>
-    </div>
-  </aside>
-  <main id="map"></main>
-</div>
-<script>
-(function(){
-  const campus=document.getElementById('campus');
-  const status=document.getElementById('status');
-  const save=document.getElementById('save');
-  const redraw=document.getElementById('redraw');
-  const cancel=document.getElementById('cancel');
-  campus.textContent=bootstrap.campusDisplayName;
-
-  function send(message){
-    if(window.ipc&&window.ipc.postMessage){window.ipc.postMessage(JSON.stringify(message));}
-  }
-  function setStatus(text){status.textContent=text;}
-
-  const map=new AMap.Map('map',{center:bootstrap.anchorGcj02,zoom:16,viewMode:'2D'});
-  const mouseTool=new AMap.MouseTool(map);
-  let polygon=null;
-  let editor=null;
-
-  function closeEditor(){if(editor){editor.close();editor=null;}}
-  function removePolygon(){closeEditor();if(polygon){map.remove(polygon);polygon=null;}save.disabled=true;}
-  function editPolygon(nextPolygon){
-    closeEditor();
-    polygon=nextPolygon;
-    editor=new AMap.PolygonEditor(map,polygon);
-    editor.open();
-    save.disabled=false;
-    map.setFitView([polygon],false,[80,80,80,80]);
-    setStatus('边界可编辑；确认无误后保存。');
-  }
-  function startDrawing(){
-    removePolygon();
-    mouseTool.polygon({strokeColor:'#2563eb',strokeWeight:3,fillColor:'#2563eb',fillOpacity:0.14});
-    setStatus('单击添加顶点，双击结束圈画。');
-  }
-
-  mouseTool.on('draw',function(event){mouseTool.close(false);editPolygon(event.obj);});
-
-  if(bootstrap.existingBoundaryGcj02&&bootstrap.existingBoundaryGcj02.length>=3){
-    editPolygon(new AMap.Polygon({path:bootstrap.existingBoundaryGcj02,strokeColor:'#2563eb',strokeWeight:3,fillColor:'#2563eb',fillOpacity:0.14}));
-  }else{
-    startDrawing();
-  }
-
-  redraw.addEventListener('click',startDrawing);
-  save.addEventListener('click',function(){
-    if(!polygon){return;}
-    const coordinates=polygon.getPath().map(function(point){return [point.lng,point.lat];});
-    setStatus('正在由 MCRebuild 校验并保存…');
-    save.disabled=true;
-    send({type:'submit_boundary',coordinates:coordinates});
-  });
-  cancel.addEventListener('click',function(){send({type:'cancel'});});
-
-  window.mcrebuildBoundaryResult=function(result){
-    save.disabled=!polygon;
-    setStatus(result&&result.message?result.message:'边界处理完成。');
-  };
-
-  map.on('complete',function(){send({type:'ready'});});
-})();
-</script>
-</body>
-</html>"#;
+<script>const bootstrap=JSON.parse(document.getElementById('mcrebuild-bootstrap').textContent);window._AMapSecurityConfig={securityJsCode:bootstrap.securityCode};</script>
+<script src="https://webapi.amap.com/maps?v=2.0&key=__AMAP_JS_KEY__&plugin=AMap.MouseTool,AMap.PolygonEditor"></script></head>
+<body><div id="app"><aside id="panel"><div><div id="campus"></div><div id="hint">拖动顶点可修正边界；需要重新圈选时点击“重新圈画”。边界有效性由 MCRebuild Core 最终校验。</div></div><div id="status">正在加载地图…</div><div class="actions"><button id="redraw">重新圈画</button><button id="save" class="primary" disabled>保存边界</button><button id="cancel">关闭</button></div></aside><main id="map"></main></div>
+<script>(function(){
+const campus=document.getElementById('campus'),status=document.getElementById('status'),save=document.getElementById('save'),redraw=document.getElementById('redraw'),cancel=document.getElementById('cancel');campus.textContent=bootstrap.campusDisplayName;
+function send(message){if(window.ipc&&window.ipc.postMessage){window.ipc.postMessage(JSON.stringify(message));}}function setStatus(text){status.textContent=text;}
+const map=new AMap.Map('map',{center:bootstrap.anchorGcj02,zoom:16,viewMode:'2D'});const mouseTool=new AMap.MouseTool(map);let polygon=null,editor=null;
+function closeEditor(){if(editor){editor.close();editor=null;}}function removePolygon(){closeEditor();if(polygon){map.remove(polygon);polygon=null;}save.disabled=true;}
+function editPolygon(next){closeEditor();polygon=next;editor=new AMap.PolygonEditor(map,polygon);editor.open();save.disabled=false;map.setFitView([polygon],false,[80,80,80,80]);setStatus('边界可编辑；确认无误后保存。');}
+function startDrawing(){removePolygon();mouseTool.polygon({strokeColor:'#2563eb',strokeWeight:3,fillColor:'#2563eb',fillOpacity:.14});setStatus('单击添加顶点，双击结束圈画。');}
+mouseTool.on('draw',function(event){mouseTool.close(false);editPolygon(event.obj);});
+if(bootstrap.existingBoundaryGcj02&&bootstrap.existingBoundaryGcj02.length>=3){editPolygon(new AMap.Polygon({path:bootstrap.existingBoundaryGcj02,strokeColor:'#2563eb',strokeWeight:3,fillColor:'#2563eb',fillOpacity:.14}));}else{startDrawing();}
+redraw.addEventListener('click',startDrawing);save.addEventListener('click',function(){if(!polygon)return;const coordinates=polygon.getPath().map(function(p){return[p.lng,p.lat];});setStatus('正在由 MCRebuild 校验并保存…');save.disabled=true;send({type:'submit_boundary',coordinates});});cancel.addEventListener('click',function(){send({type:'cancel'});});
+window.mcrebuildBoundaryResult=function(result){save.disabled=!polygon;setStatus(result&&result.message?result.message:'边界处理完成。');};map.on('complete',function(){send({type:'ready'});});
+})();</script></body></html>"#;
 
 #[cfg(test)]
 mod tests {
@@ -319,26 +227,25 @@ mod tests {
 
     #[test]
     fn bootstrap_json_cannot_break_out_of_script_element() {
-        let mut config = config();
-        config.campus_display_name = "</script><script>alert(1)</script>".into();
-        let html = build_boundary_editor_html(&config).unwrap();
+        let mut value = config();
+        value.campus_display_name = "</script><script>alert(1)</script>".into();
+        let html = build_boundary_editor_html(&value).unwrap();
         assert!(!html.contains("</script><script>alert(1)</script>"));
         assert!(html.contains("\\u003c/script\\u003e"));
     }
 
     #[test]
-    fn missing_web_keys_are_rejected_before_page_creation() {
-        let mut missing_key = config();
-        missing_key.js_api_key.clear();
+    fn missing_web_keys_are_rejected() {
+        let mut value = config();
+        value.js_api_key.clear();
         assert!(matches!(
-            build_boundary_editor_html(&missing_key),
+            build_boundary_editor_html(&value),
             Err(BoundaryMapError::MissingJsApiKey)
         ));
-
-        let mut missing_security = config();
-        missing_security.security_code.clear();
+        let mut value = config();
+        value.security_code.clear();
         assert!(matches!(
-            build_boundary_editor_html(&missing_security),
+            build_boundary_editor_html(&value),
             Err(BoundaryMapError::MissingSecurityCode)
         ));
     }
@@ -347,13 +254,15 @@ mod tests {
     fn gcj_submission_is_normalized_back_to_wgs84() {
         let original = point(121.400, 31.226);
         let (gcj_lon, gcj_lat) = wgs84_to_gcj02(original);
-        let message = format!(
-            r#"{{"type":"submit_boundary","coordinates":[[{gcj_lon},{gcj_lat}],[{},{ }],[{},{ }]]}}"#,
-            gcj_lon + 0.001,
-            gcj_lat,
-            gcj_lon + 0.001,
-            gcj_lat + 0.001
-        );
+        let message = serde_json::json!({
+            "type": "submit_boundary",
+            "coordinates": [
+                [gcj_lon, gcj_lat],
+                [gcj_lon + 0.001, gcj_lat],
+                [gcj_lon + 0.001, gcj_lat + 0.001]
+            ]
+        })
+        .to_string();
         let event = parse_boundary_map_event(&message).unwrap();
         let BoundaryMapEvent::SubmitBoundary(vertices) = event else {
             panic!("expected boundary submission");
@@ -363,7 +272,7 @@ mod tests {
     }
 
     #[test]
-    fn ready_and_cancel_messages_stay_transport_only() {
+    fn transport_messages_parse_without_project_logic() {
         assert_eq!(
             parse_boundary_map_event(r#"{"type":"ready"}"#).unwrap(),
             BoundaryMapEvent::Ready
@@ -375,7 +284,7 @@ mod tests {
     }
 
     #[test]
-    fn malformed_or_out_of_range_coordinates_are_rejected() {
+    fn out_of_range_coordinates_are_rejected() {
         let error = parse_boundary_map_event(
             r#"{"type":"submit_boundary","coordinates":[[999.0,31.2]]}"#,
         )
