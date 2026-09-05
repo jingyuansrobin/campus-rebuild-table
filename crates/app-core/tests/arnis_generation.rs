@@ -4,9 +4,7 @@ use app_core::{
     create_project_from_candidate, generate_project_with_arnis, set_project_boundary,
     CreateProjectFromCandidateRequest, GenerateProjectRequest, SetProjectBoundaryRequest,
 };
-use campus_core::{
-    CampusCandidate, CampusIdentity, CampusSourceReference, Wgs84Coordinate,
-};
+use campus_core::{CampusCandidate, CampusIdentity, CampusSourceReference, Wgs84Coordinate};
 use std::fs;
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
