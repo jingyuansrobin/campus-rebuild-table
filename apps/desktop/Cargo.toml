@@ -1,0 +1,14 @@
+[package]
+name = "mcrebuild-desktop"
+version.workspace = true
+edition.workspace = true
+publish = false
+
+[dependencies]
+app-core.workspace = true
+gaode-map.workspace = true
+serde_json.workspace = true
+
+[target.'cfg(target_os = "windows")'.dependencies]
+winit.workspace = true
+wry.workspace = true
