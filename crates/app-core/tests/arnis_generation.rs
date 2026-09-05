@@ -41,6 +41,8 @@ fn create_fake_arnis(bin_dir: &Path) -> PathBuf {
         &executable,
         r#"#!/bin/sh
 if [ "$1" = "--version" ]; then
+  echo "fake banner"
+  echo "version 9.9.9-test"
   echo "arnis 9.9.9-test"
   exit 0
 fi
@@ -105,14 +107,14 @@ fn successful_generation_promotes_one_complete_world_and_records_provenance() {
 
     let expected_world = project_dir.join("generated/world");
     assert_eq!(result.world_dir, expected_world);
-    assert_eq!(result.generator_version, "arnis 9.9.9-test");
+    assert_eq!(result.generator_version, "9.9.9-test");
     assert!(result.world_dir.join("level.dat").is_file());
     assert!(result.manifest_path.is_file());
 
     let manifest: serde_json::Value =
         serde_json::from_slice(&fs::read(&result.manifest_path).unwrap()).unwrap();
     assert_eq!(manifest["generator"], "arnis");
-    assert_eq!(manifest["generator_version"], "arnis 9.9.9-test");
+    assert_eq!(manifest["generator_version"], "9.9.9-test");
     assert_eq!(manifest["world_format"], "java_anvil");
     assert_eq!(manifest["boundary_transport"], "polygon_bounding_box");
     assert_eq!(manifest["blocks_per_meter"], 1.5);
