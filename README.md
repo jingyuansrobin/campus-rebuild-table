@@ -28,13 +28,62 @@ V3 当前采用：
 → 打开生成结果进入 Minecraft 精修
 ```
 
+## 当前进度
+
+### v0.1 — Local CampusProject ✅
+
+Headless Core 可以创建本地项目目录并持久化 `project.json`、`reality.json` 与 `objects.json`。
+
+### v0.2 — 高校 / 校区搜索 ✅ core path
+
+V3 不复制 V2 的 WebView 搜索实现。搜索通过独立 Rust 适配器调用高德 Web Service，地图 WebView 留给后续边界展示和编辑。
+
+当前搜索链：
+
+```text
+CLI / future Desktop
+        ↓
+gaode-search
+        ↓
+AMap Web Service（仅高等院校 141201）
+        ↓
+CampusCandidate
+        ↓
+app-core
+        ↓
+CampusProject + RealityModel
+```
+
+高德 Web Service key 通过运行时环境变量提供：
+
+```text
+AMAP_WEB_SERVICE_KEY
+```
+
+不要把 key 写入源码、项目文件或 Git。
+
+开发阶段 CLI：
+
+```text
+# 搜索高校 / 校区候选
+mcrebuild-cli search-campus "华东师范大学" "上海市"
+
+# 根据搜索结果中的 POI id 创建项目
+mcrebuild-cli init-campus ./ecnu "华东师范大学" <poi_id> 1.5 1.20.1 "上海市"
+
+# 保留的手工初始化入口
+mcrebuild-cli init ./ecnu "华东师范大学" "普陀校区" 1.5 1.20.1
+```
+
+`search-campus` 与 `init-campus` 是开发 / 验证入口，不是最终桌面交互。未来 Desktop 会直接持有用户选中的 `CampusCandidate`，不会为了创建项目再次发起搜索。
+
 ## 仓库定位
 
 本仓库是 MCRebuild V3 的主开发仓库。
 
 旧仓库 `jingyuansrobin/campus-reconstruction-tool` 作为 V2 产品基线、历史实现和成熟代码参考，不做整仓复制；V3 只选择性迁移仍服务于新产品闭环的能力。
 
-## 初始工程结构
+## 工程结构
 
 ```text
 apps/
@@ -43,6 +92,7 @@ apps/
 crates/
   campus-core/         # CampusProject / RealityModel / CampusObject 等领域模型
   app-core/            # 应用用例
+  gaode-search/        # 高德高校 / 校区搜索适配器
   arnis-adapter/       # Arnis 适配边界
 docs/
   architecture/        # V3 架构
@@ -58,3 +108,5 @@ docs/
 4. Arnis 不渗透进 MCRebuild 领域模型，通过适配层隔离。
 5. 项目数据优先可读、可迁移、可 diff。
 6. V3.0 不重新实现 Arnis 已经解决的基础 GIS → Minecraft 生成能力。
+7. V2 只作为参考实现；迁移前先审计产品价值和实现质量，允许重写或删除。
+8. 完整 vertical slice 通过 feature branch + CI + PR 合并到 `main`，避免中间失败状态直接进入主线。
