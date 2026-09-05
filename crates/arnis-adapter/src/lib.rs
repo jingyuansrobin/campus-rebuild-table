@@ -1,5 +1,6 @@
 use campus_core::{GenerationScale, Wgs84BoundingBox};
 use std::ffi::{OsStr, OsString};
+use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use thiserror::Error;
@@ -43,7 +44,17 @@ impl ArnisAdapter {
         }
     }
 
-    pub fn run(&self, spec: &ArnisRunSpec) -> Result<(), ArnisError> {
+    /// Run Arnis and resolve the Java world directory it creates below `output_dir`.
+    ///
+    /// Arnis currently treats `--output-dir` as a parent directory for Java worlds and
+    /// creates a child such as `Arnis World 1`. This provider-specific behavior is kept
+    /// inside the adapter so MCRebuild application code never depends on that naming scheme.
+    pub fn run(&self, spec: &ArnisRunSpec) -> Result<ArnisRunResult, ArnisError> {
+        fs::create_dir_all(&spec.output_dir).map_err(|source| ArnisError::PrepareOutput {
+            output_dir: spec.output_dir.clone(),
+            source,
+        })?;
+
         let plan = self.plan(spec);
         let status = Command::new(&plan.executable)
             .args(&plan.args)
@@ -60,7 +71,8 @@ impl ArnisAdapter {
             return Err(ArnisError::NonZeroExit { code: status.code() });
         }
 
-        Ok(())
+        let world_dir = discover_java_world(&spec.output_dir)?;
+        Ok(ArnisRunResult { world_dir })
     }
 
     pub fn probe_version(&self) -> Result<String, ArnisError> {
@@ -90,9 +102,15 @@ impl ArnisAdapter {
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct ArnisRunSpec {
+    /// Parent directory into which Arnis creates a Java world directory.
     pub output_dir: PathBuf,
     pub bbox: Wgs84BoundingBox,
     pub scale: GenerationScale,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ArnisRunResult {
+    pub world_dir: PathBuf,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -122,8 +140,44 @@ impl ArnisCommandPlan {
     }
 }
 
+fn discover_java_world(output_dir: &Path) -> Result<PathBuf, ArnisError> {
+    let entries = fs::read_dir(output_dir).map_err(|source| ArnisError::ScanOutput {
+        output_dir: output_dir.to_path_buf(),
+        source,
+    })?;
+
+    let mut worlds = Vec::new();
+    for entry in entries {
+        let entry = entry.map_err(|source| ArnisError::ScanOutput {
+            output_dir: output_dir.to_path_buf(),
+            source,
+        })?;
+        let path = entry.path();
+        if path.is_dir() && path.join("level.dat").is_file() {
+            worlds.push(path);
+        }
+    }
+
+    match worlds.len() {
+        1 => Ok(worlds.remove(0)),
+        0 => Err(ArnisError::MissingJavaWorld {
+            output_dir: output_dir.to_path_buf(),
+        }),
+        count => Err(ArnisError::MultipleJavaWorlds {
+            output_dir: output_dir.to_path_buf(),
+            count,
+        }),
+    }
+}
+
 #[derive(Debug, Error)]
 pub enum ArnisError {
+    #[error("failed to prepare Arnis output directory {output_dir}: {source}")]
+    PrepareOutput {
+        output_dir: PathBuf,
+        #[source]
+        source: std::io::Error,
+    },
     #[error("failed to launch Arnis executable {executable}: {source}")]
     Launch {
         executable: PathBuf,
@@ -136,11 +190,22 @@ pub enum ArnisError {
     VersionProbeFailed { code: Option<i32> },
     #[error("Arnis --version returned no version text")]
     EmptyVersion,
+    #[error("failed to inspect Arnis output directory {output_dir}: {source}")]
+    ScanOutput {
+        output_dir: PathBuf,
+        #[source]
+        source: std::io::Error,
+    },
+    #[error("Arnis exited successfully but created no Java world under {output_dir}")]
+    MissingJavaWorld { output_dir: PathBuf },
+    #[error("Arnis created {count} Java worlds under {output_dir}; expected exactly one")]
+    MultipleJavaWorlds { output_dir: PathBuf, count: usize },
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::time::{SystemTime, UNIX_EPOCH};
 
     fn spec() -> ArnisRunSpec {
         ArnisRunSpec {
@@ -153,6 +218,14 @@ mod tests {
             },
             scale: GenerationScale::try_new(1.5).unwrap(),
         }
+    }
+
+    fn temporary_test_path(label: &str) -> PathBuf {
+        let nonce = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        std::env::temp_dir().join(format!("mcrebuild-arnis-{label}-{nonce}"))
     }
 
     #[test]
@@ -183,5 +256,36 @@ mod tests {
         assert!(!plan.contains_arg("--minecraft-version"));
         assert!(!plan.contains_arg("--polygon"));
         assert!(plan.contains_arg("--bbox"));
+    }
+
+    #[test]
+    fn discovers_world_child_created_under_arnis_output_parent() {
+        let output_dir = temporary_test_path("discover");
+        let world_dir = output_dir.join("Arnis World 1");
+        fs::create_dir_all(&world_dir).unwrap();
+        fs::write(world_dir.join("level.dat"), b"fixture").unwrap();
+
+        let discovered = discover_java_world(&output_dir).unwrap();
+        assert_eq!(discovered, world_dir);
+
+        fs::remove_dir_all(output_dir).unwrap();
+    }
+
+    #[test]
+    fn rejects_ambiguous_multiple_world_outputs() {
+        let output_dir = temporary_test_path("multiple");
+        for name in ["Arnis World 1", "Arnis World 2"] {
+            let world_dir = output_dir.join(name);
+            fs::create_dir_all(&world_dir).unwrap();
+            fs::write(world_dir.join("level.dat"), b"fixture").unwrap();
+        }
+
+        let error = discover_java_world(&output_dir).unwrap_err();
+        assert!(matches!(
+            error,
+            ArnisError::MultipleJavaWorlds { count: 2, .. }
+        ));
+
+        fs::remove_dir_all(output_dir).unwrap();
     }
 }
