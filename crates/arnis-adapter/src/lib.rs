@@ -278,10 +278,7 @@ mod tests {
 arnis 3.1.0
 "#;
 
-        assert_eq!(
-            parse_version_output(stdout, ""),
-            Some("3.1.0".to_owned())
-        );
+        assert_eq!(parse_version_output(stdout, ""), Some("3.1.0".to_owned()));
     }
 
     #[test]
