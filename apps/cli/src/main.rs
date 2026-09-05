@@ -219,10 +219,9 @@ mod tests {
 
     #[test]
     fn boundary_cli_parser_accepts_wgs84_pairs() {
-        let vertices = parse_boundary_vertices(
-            "121.398,31.222;121.414,31.222;121.414,31.234;121.398,31.234",
-        )
-        .unwrap();
+        let vertices =
+            parse_boundary_vertices("121.398,31.222;121.414,31.222;121.414,31.234;121.398,31.234")
+                .unwrap();
         assert_eq!(vertices.len(), 4);
         assert_eq!(vertices[0].longitude(), 121.398);
     }
