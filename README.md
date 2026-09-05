@@ -190,7 +190,29 @@ Arnis child process
 
 当前取消保证针对直接 Arnis 子进程。只有在真实运行证明 Arnis 会留下需要处理的子孙进程时，才增加 Windows Job Object / Unix process group 等进程树管理；V3.0 不为假设提前建设这层复杂度。
 
-下一步是 v0.5b：把该生命周期接入 Desktop worker thread，让 Native UI 在生成期间保持响应，并提供阶段状态、日志与取消操作。
+### v0.5b — Desktop 生成 Worker ✅ code path / ⚠ Windows runtime smoke test pending
+
+Windows Desktop 已把 v0.5a 生命周期接入 winit/Wry 事件循环：
+
+```text
+WebView generation panel
+        ↓ IPC: start_generation / cancel_generation
+Windows Desktop shell
+        ↓ spawn worker thread
+app-core generate_project_with_arnis_observed
+        ↓ GenerationEvent
+EventLoopProxy<UserEvent>
+        ↓
+Wry UI: stage / raw logs / finished
+```
+
+生成不再阻塞 UI 线程。界面提供“开始生成”、四阶段状态、最多 300 行原始 stdout/stderr 日志和“取消”。生成期间 Core 项目边界禁止写入，避免用户一边生成一边修改权威边界导致一次生成过程内出现语义漂移。
+
+用户在生成期间关闭窗口时，Desktop 不立即退出进程，而是先触发 cancellation，等待 app-core/adapter 完成 staging 清理并返回，再退出事件循环。`ARNIS_EXECUTABLE` 可指定 Arnis 二进制；未设置时仍使用 `PATH` 中的 `arnis`。
+
+当前生成面板是 Desktop 在边界页 Ready 后注入的 **vertical-slice 过渡 UI**。它的好处是没有把生成职责塞进 `gaode-map`，但它不应演化为长期页面架构。更成熟的最终形态应是 Desktop/应用壳拥有页面布局，地图只是其中一个组件，而不是持续向地图页追加 DOM。
+
+Windows CI 已真实编译该 worker / `EventLoopProxy` / Wry 路径，但还没有在真实 Windows + WebView2 + 高德 JS + Arnis 组合环境中完成 GUI smoke。因而当前只能宣称“代码路径和平台编译成立”，不能宣称 Desktop 生成体验已经用户验证。
 
 ## 仓库定位
 
