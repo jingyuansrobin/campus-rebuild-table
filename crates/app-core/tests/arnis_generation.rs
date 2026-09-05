@@ -1,10 +1,10 @@
 #![cfg(unix)]
 
 use app_core::{
-    create_project_from_candidate, generate_project_with_arnis, generate_project_with_arnis_observed,
-    set_project_boundary, CreateProjectFromCandidateRequest, GenerateProjectError,
-    GenerateProjectRequest, GenerationCancellationToken, GenerationEvent, GenerationLogStream,
-    GenerationStage, SetProjectBoundaryRequest,
+    create_project_from_candidate, generate_project_with_arnis,
+    generate_project_with_arnis_observed, set_project_boundary, CreateProjectFromCandidateRequest,
+    GenerateProjectError, GenerateProjectRequest, GenerationCancellationToken, GenerationEvent,
+    GenerationLogStream, GenerationStage, SetProjectBoundaryRequest,
 };
 use campus_core::{CampusCandidate, CampusIdentity, CampusSourceReference, Wgs84Coordinate};
 use std::fs;
@@ -261,7 +261,10 @@ fn cancellation_kills_generation_and_removes_staging_without_publishing_world() 
     assert!(saw_preparing);
 
     cancellation.cancel();
-    let error = worker.join().expect("generation worker should not panic").unwrap_err();
+    let error = worker
+        .join()
+        .expect("generation worker should not panic")
+        .unwrap_err();
     assert!(matches!(error, GenerateProjectError::Cancelled));
     assert!(!project_dir.join("generated/world").exists());
     assert_eq!(
