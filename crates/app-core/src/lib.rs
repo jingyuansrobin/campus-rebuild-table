@@ -61,6 +61,7 @@ pub struct GenerationManifest {
     pub generator_version: String,
     pub mode: &'static str,
     pub generation_target: GenerationTarget,
+    pub world_format: &'static str,
     pub blocks_per_meter: f32,
     pub transport_bbox: Wgs84BoundingBox,
     pub boundary_transport: &'static str,
@@ -125,27 +126,30 @@ pub fn generate_project_with_arnis(
     let project = read_project(&request.project_dir)?;
     ensure_supported_generation_target(project.generation_target)?;
 
-    let final_world_dir = request.project_dir.join("generated").join("world");
+    let generated_dir = request.project_dir.join("generated");
+    let final_world_dir = generated_dir.join("world");
     if final_world_dir.exists() {
         return Err(GenerateProjectError::OutputAlreadyExists(final_world_dir));
     }
 
     let cache_dir = request.project_dir.join("cache");
     fs::create_dir_all(&cache_dir)?;
-    let staging_world_dir = cache_dir.join(format!("arnis-world-{}", Uuid::new_v4()));
-    let run_spec = build_arnis_run_spec(&project, staging_world_dir.clone())?;
+    fs::create_dir_all(&generated_dir)?;
+
+    // Arnis treats --output-dir as a parent for Java worlds, so stage each run in
+    // a unique parent directory and let the adapter resolve the actual child world.
+    let staging_root = cache_dir.join(format!("arnis-run-{}", Uuid::new_v4()));
+    let run_spec = build_arnis_run_spec(&project, staging_root.clone())?;
     let adapter = ArnisAdapter::new(request.arnis_executable);
     let generator_version = adapter.probe_version()?;
 
-    if let Err(error) = adapter.run(&run_spec) {
-        remove_path_if_present(&staging_world_dir);
-        return Err(error.into());
-    }
-
-    if !staging_world_dir.join("level.dat").is_file() {
-        remove_path_if_present(&staging_world_dir);
-        return Err(GenerateProjectError::MissingLevelDat);
-    }
+    let run_result = match adapter.run(&run_spec) {
+        Ok(result) => result,
+        Err(error) => {
+            remove_path_if_present(&staging_root);
+            return Err(error.into());
+        }
+    };
 
     let manifest = GenerationManifest {
         schema_version: GENERATION_MANIFEST_SCHEMA_VERSION,
@@ -153,20 +157,22 @@ pub fn generate_project_with_arnis(
         generator_version: generator_version.clone(),
         mode: ARNIS_GENERATION_MODE,
         generation_target: project.generation_target,
+        world_format: "java_anvil",
         blocks_per_meter: project.generation_scale.blocks_per_meter(),
         transport_bbox: run_spec.bbox,
         boundary_transport: "polygon_bounding_box",
     };
-    let staging_manifest = staging_world_dir.join(".mcrebuild-generation.json");
+    let staging_manifest = run_result.world_dir.join(".mcrebuild-generation.json");
     if let Err(error) = write_json_atomic(&staging_manifest, &manifest) {
-        remove_path_if_present(&staging_world_dir);
+        remove_path_if_present(&staging_root);
         return Err(error.into());
     }
 
-    fs::rename(&staging_world_dir, &final_world_dir).map_err(|error| {
-        remove_path_if_present(&staging_world_dir);
-        GenerateProjectError::Io(error)
-    })?;
+    if let Err(error) = fs::rename(&run_result.world_dir, &final_world_dir) {
+        remove_path_if_present(&staging_root);
+        return Err(GenerateProjectError::Io(error));
+    }
+    remove_path_if_present(&staging_root);
 
     Ok(GenerationResult {
         manifest_path: final_world_dir.join(".mcrebuild-generation.json"),
@@ -325,8 +331,6 @@ pub enum GenerateProjectError {
     MissingBoundary,
     #[error("generated world already exists at {0}; MCRebuild will not overwrite it")]
     OutputAlreadyExists(PathBuf),
-    #[error("Arnis exited successfully but did not create a Java world level.dat")]
-    MissingLevelDat,
     #[error(transparent)]
     Generator(#[from] ArnisError),
     #[error(transparent)]
@@ -541,8 +545,9 @@ mod tests {
             GenerationScale::try_new(1.5).unwrap(),
         );
         project.set_boundary(CampusBoundary::try_new(valid_boundary_vertices()).unwrap());
-        let spec = build_arnis_run_spec(&project, PathBuf::from("staging-world")).unwrap();
+        let spec = build_arnis_run_spec(&project, PathBuf::from("staging-parent")).unwrap();
 
+        assert_eq!(spec.output_dir, PathBuf::from("staging-parent"));
         assert_eq!(spec.scale.blocks_per_meter(), 1.5);
         assert_eq!(spec.bbox.min_longitude, 121.3980);
         assert_eq!(spec.bbox.min_latitude, 31.2220);
