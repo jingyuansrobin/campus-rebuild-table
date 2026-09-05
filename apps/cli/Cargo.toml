@@ -5,4 +5,5 @@ edition.workspace = true
 
 [dependencies]
 app-core.workspace = true
+campus-core.workspace = true
 gaode-search.workspace = true
