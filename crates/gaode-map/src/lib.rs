@@ -132,8 +132,8 @@ fn wgs84_pair_to_gcj02(longitude: f64, latitude: f64) -> (f64, f64) {
     let sin_lat = rad_lat.sin();
     let magic = 1.0 - KRASOVSKY_EE * sin_lat * sin_lat;
     let sqrt_magic = magic.sqrt();
-    let d_lat = (d_lat * 180.0)
-        / ((KRASOVSKY_A * (1.0 - KRASOVSKY_EE)) / (magic * sqrt_magic) * PI);
+    let d_lat =
+        (d_lat * 180.0) / ((KRASOVSKY_A * (1.0 - KRASOVSKY_EE)) / (magic * sqrt_magic) * PI);
     let d_lon = (d_lon * 180.0) / (KRASOVSKY_A / sqrt_magic * rad_lat.cos() * PI);
     (longitude + d_lon, latitude + d_lat)
 }
@@ -285,10 +285,9 @@ mod tests {
 
     #[test]
     fn out_of_range_coordinates_are_rejected() {
-        let error = parse_boundary_map_event(
-            r#"{"type":"submit_boundary","coordinates":[[999.0,31.2]]}"#,
-        )
-        .unwrap_err();
+        let error =
+            parse_boundary_map_event(r#"{"type":"submit_boundary","coordinates":[[999.0,31.2]]}"#)
+                .unwrap_err();
         assert!(matches!(
             error,
             BoundaryMapError::InvalidCoordinate { index: 0 }
