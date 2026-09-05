@@ -124,10 +124,7 @@ fn ensure_target_is_empty_directory(path: &Path) -> Result<(), CreateProjectErro
     Ok(())
 }
 
-fn write_json_atomic<T: Serialize>(
-    path: &Path,
-    value: &T,
-) -> Result<(), ProjectFileWriteError> {
+fn write_json_atomic<T: Serialize>(path: &Path, value: &T) -> Result<(), ProjectFileWriteError> {
     let temp_path = path.with_extension("json.tmp");
     let bytes = serde_json::to_vec_pretty(value)?;
     fs::write(&temp_path, bytes)?;
