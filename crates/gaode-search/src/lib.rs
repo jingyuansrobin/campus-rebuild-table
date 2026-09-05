@@ -95,13 +95,17 @@ pub fn parse_search_response(json: &str) -> Result<Vec<CampusCandidate>, SearchE
             continue;
         }
 
+        let identity = parse_campus_identity(display_name);
+        let address = compose_address(&raw);
+        let external_id = raw.id;
+
         candidates.push(CampusCandidate {
             source: CampusSourceReference {
                 provider: "gaode".to_owned(),
-                external_id: raw.id,
+                external_id,
             },
-            identity: parse_campus_identity(display_name),
-            address: compose_address(&raw),
+            identity,
+            address,
             anchor,
         });
     }
